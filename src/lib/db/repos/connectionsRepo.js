@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getDisabledByProvider, disableModels } from "./disabledModelsRepo.js";
+import { encryptConnectionData, decryptConnectionData } from "../crypto/credentialCipher.js";
 
 const OPTIONAL_FIELDS = [
   "displayName", "email", "globalPriority", "defaultModel",
@@ -12,11 +13,24 @@ const OPTIONAL_FIELDS = [
   "earliestPackageExpiry", "earliestPackageName", "quotaCheckedAt",
 ];
 
+// Every read and every write of a connection funnels through these two, which is
+// what makes credential encryption transparent to the rest of the app (issue #9,
+// item 2): `data` is encrypted on the way into SQLite and decrypted on the way
+// out, so no caller has to know about it — including the request path that pulls
+// a token to call upstream.
 function rowToConn(row) {
   if (!row) return null;
   const extra = parseJson(row.data, {});
+  const { data: decoded, error } = decryptConnectionData(extra);
+  if (error) {
+    // Loud but not fatal: surface it on the row the dashboard already renders
+    // instead of throwing from every read (which would take the whole app down
+    // when a database is restored without its key file).
+    decoded.testStatus = "unavailable";
+    decoded.lastError = `Credentials unreadable: ${error}`;
+  }
   return {
-    ...extra,
+    ...decoded,
     id: row.id,
     provider: row.provider,
     authType: row.authType,
@@ -39,7 +53,7 @@ function connToRow(c) {
     email: email ?? null,
     priority: priority ?? null,
     isActive: isActive === false ? 0 : 1,
-    data: stringifyJson(rest),
+    data: stringifyJson(encryptConnectionData(rest)),
     createdAt,
     updatedAt,
   };

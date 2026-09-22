@@ -224,6 +224,9 @@ describe("xiaomi-mimo usage adapter", () => {
     expect(out.quotas.Weekly.used).toBe(6);
     expect(out.quotas.Weekly.remainingPercentage).toBe(94);
     expect(out.quotas.Weekly.unlimited).toBe(false);
+    // weekly RESET window, not a one-shot pack — the expiry badge must keep
+    // showing the reset time even when the week is fully drained
+    expect(out.quotas.Weekly.recurring).toBe(true);
     expect(out.quotas.Weekly.resetAt).toBe("2026-09-16T00:00:00.000Z");
   });
 

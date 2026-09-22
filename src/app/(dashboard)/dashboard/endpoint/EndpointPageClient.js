@@ -95,7 +95,7 @@ export default function APIPageClient({ machineId }) {
   const isLoginUnsafe = !requireLogin || !hasPassword;
   const unsafeReason = !requireLogin
     ? "Enable \"Require login\" and set a custom password before activating the tunnel."
-    : "Change the default dashboard password before activating the tunnel.";
+    : "Set a dashboard password before activating the tunnel.";
 
   // Auto-scroll install log
   useEffect(() => {
@@ -821,7 +821,7 @@ export default function APIPageClient({ machineId }) {
               </>
             ) : tunnelLoading ? (
               <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-surface text-sm text-text-muted">
                   <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
                   {tunnelProgress || translate("Creating tunnel...")}
                 </div>
@@ -843,7 +843,7 @@ export default function APIPageClient({ machineId }) {
               </>
             ) : tunnelChecking ? (
               <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-surface text-sm text-text-muted">
                   <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
                   Checking...
                 </div>
@@ -911,7 +911,7 @@ export default function APIPageClient({ machineId }) {
               </>
             ) : (tsLoading || tsConnecting) ? (
               <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-surface text-sm text-text-muted">
                   <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
                   {tsProgress || translate("Connecting...")}
                 </div>
@@ -981,7 +981,7 @@ export default function APIPageClient({ machineId }) {
                 message={
                   !requireLogin
                     ? translate("Require login is disabled — anyone can access your dashboard via tunnel.")
-                    : translate("Dashboard uses the default password — change it in Profile settings.")
+                    : translate("No dashboard password is set — set one on the Settings page.")
                 }
                 action={{
                   label: !requireLogin ? translate("Enable") : translate("Change password"),

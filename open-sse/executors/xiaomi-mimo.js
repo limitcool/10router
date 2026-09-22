@@ -1,5 +1,6 @@
 import { DefaultExecutor } from "./default.js";
 import { getMimoAccountCookie, invalidateMimoAccountCookieCache, MIMO_API_BASE, MIMO_API_UA } from "../shared/mimoAccount.js";
+import { normalizeMimoApiBase } from "../config/providers.js";
 
 // Desktop-exclusive Preview models. These are served by the account service's
 // /api/route proxy, authorized by the Xiaomi account session (NOT the sk- key).
@@ -58,6 +59,20 @@ export class XiaomiMimoExecutor extends DefaultExecutor {
     // declared transports — resolve it before the default runtimeTransport path.
     if (XiaomiMimoExecutor.isPreviewModel(model)) {
       return `${MIMO_API_BASE}/api/route/chat/completions`;
+    }
+    // The endpoint the platform handed back at sign-in (stored as psd.baseUrl —
+    // exactly what MiMo Desktop keeps in auth.json metadata.base_url) decides the
+    // cluster: billing keys get api.xiaomimimo.com, Token Plan subscribers get a
+    // token-plan-{region} host. The registry transports hardcode the billing host,
+    // so rebuild from the stored base whenever one is present. For the default
+    // billing base this reproduces the transport URL byte-for-byte.
+    const rt = credentials?.runtimeTransport;
+    const stored = normalizeMimoApiBase(credentials?.providerSpecificData?.baseUrl);
+    if (rt?.baseUrl && stored) {
+      if (rt.baseUrl.endsWith("/anthropic/v1/messages")) {
+        return `${stored.replace(/\/v1$/, "")}/anthropic/v1/messages`;
+      }
+      return `${stored}/chat/completions`;
     }
     // Cloud API models keep default handling, so a Claude-format client reaches
     // the /anthropic/v1/messages transport.

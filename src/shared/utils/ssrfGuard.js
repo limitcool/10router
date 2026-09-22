@@ -12,6 +12,15 @@
 //                                internal target without the redirect target being
 //                                re-validated through layer 2 first.
 //
+// Self-hosted opt-in (Issue #25):
+//   Admin-controlled targets in self-hosted / Docker deployments (such as
+//   another container `http://cli-proxy-api-plus:8317/v1` on the same Docker
+//   bridge network) can be allowed by opt-in environment variables:
+//     - ALLOW_PRIVATE_HOSTS=1 (or "true"): master switch, allows all private/internal hosts.
+//     - PRIVATE_HOST_ALLOWLIST="host1,host2": comma-separated exact hostnames/IPs to allow.
+//   Evaluated dynamically per invocation (no module caching) so env changes
+//   take effect immediately. See search/callers.js for the admin-controlled precedent.
+//
 // Layer 1 alone previously had matching bugs, not just missing coverage: hostname
 // checks ran on the raw string without normalizing a trailing dot ("localhost."),
 // and the IPv6 check only recognized one textual representation of an IPv4-mapped
@@ -157,11 +166,30 @@ function isBlockedHost(host) {
   return false;
 }
 
+// Check if a host is allowed to bypass SSRF private/internal network checks via env.
+// Evaluated dynamically on each call so runtime env changes take effect.
+// - ALLOW_PRIVATE_HOSTS=1 (or "true") enables the master switch for all private/internal hosts.
+// - PRIVATE_HOST_ALLOWLIST="host1,host2" allows specific hostnames or IP addresses (exact match).
+function isPrivateHostAllowed(normalizedHost) {
+  const master = process.env.ALLOW_PRIVATE_HOSTS;
+  if (master === "1" || master === "true") {
+    return true;
+  }
+  const allowlist = process.env.PRIVATE_HOST_ALLOWLIST;
+  if (!allowlist) return false;
+  const allowed = allowlist
+    .split(",")
+    .map((s) => normalizeHost(s.trim()))
+    .filter(Boolean);
+  return allowed.includes(normalizedHost);
+}
+
 // Throw if URL targets a non-public host by literal hostname/IP alone (no DNS
 // resolution — see assertPublicUrlResolved for that). Caller should map to 400.
 export function assertPublicUrl(rawUrl) {
   const parsed = new URL(rawUrl);
   const host = normalizeHost(parsed.hostname);
+  if (isPrivateHostAllowed(host)) return;
   if (isBlockedHost(host)) throw new Error("Blocked URL: internal host");
 }
 
@@ -172,6 +200,7 @@ export function assertPublicUrl(rawUrl) {
 export async function assertPublicUrlResolved(rawUrl) {
   const parsed = new URL(rawUrl);
   const host = normalizeHost(parsed.hostname);
+  if (isPrivateHostAllowed(host)) return;
   if (isBlockedHost(host)) throw new Error("Blocked URL: internal host");
 
   // Already a literal IPv4/IPv6 address — isBlockedHost above already covered it,
@@ -188,6 +217,7 @@ export async function assertPublicUrlResolved(rawUrl) {
     return;
   }
   for (const { address, family } of addresses) {
+    if (isPrivateHostAllowed(normalizeHost(address))) continue;
     if (family === 4 ? isBlockedIpv4(address) : isBlockedIpv6Groups(parseIPv6ToGroups(address) || [])) {
       throw new Error("Blocked URL: hostname resolves to an internal host");
     }

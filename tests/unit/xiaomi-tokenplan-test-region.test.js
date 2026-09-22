@@ -13,7 +13,9 @@ describe("xiaomi-tokenplan test endpoint routing", () => {
     expect(resolveXiaomiTokenplanBaseUrl({ providerSpecificData: { region: "sgp" } }))
       .toBe("https://token-plan-sgp.xiaomimimo.com/v1");
 
+    // Empty region falls back to the default cluster, which is `cn` (matching
+    // MiMo Desktop's own plan preset), not the legacy `sgp` default.
     expect(resolveXiaomiTokenplanBaseUrl({ providerSpecificData: {} }))
-      .toBe("https://token-plan-sgp.xiaomimimo.com/v1");
+      .toBe("https://token-plan-cn.xiaomimimo.com/v1");
   });
 });

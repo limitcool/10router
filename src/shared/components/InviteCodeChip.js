@@ -11,7 +11,7 @@ export default function InviteCodeChip({ code, label = "Invite code" }) {
   if (!code) return null;
   const isCopied = copied === "invite-code";
   return (
-    <span className="inline-flex items-center gap-1 rounded border border-border bg-bg-subtle px-1.5 py-0.5 text-xs text-text-muted whitespace-nowrap">
+    <span className="inline-flex items-center gap-1 rounded border border-border bg-bg-alt px-1.5 py-0.5 text-xs text-text-muted whitespace-nowrap">
       <span>{label}</span>
       <code className="font-mono text-text-main">{code}</code>
       <button

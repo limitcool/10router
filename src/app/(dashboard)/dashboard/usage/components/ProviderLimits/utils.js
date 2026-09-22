@@ -581,7 +581,10 @@ export function parseQuotaData(provider, data) {
             if (quotaType === "addOn" && Array.isArray(quota.packs)) {
               quota.packs.forEach((pack, i) => {
                 normalizedQuotas.push({
-                  name: `Bonus Pack ${i + 1}`,
+                  // The last row may be an aggregate-only remainder: credits the
+                  // device-token API cannot itemise (no campaign), so it carries
+                  // no expiry and is labelled instead of numbered.
+                  name: pack.unitemized ? "Bonus Pack (unitemized)" : `Bonus Pack ${i + 1}`,
                   used: pack.used || 0,
                   total: pack.total || 0,
                   unit: quota.unit,
@@ -699,6 +702,8 @@ export function parseQuotaData(provider, data) {
         break;
 
       case "deepseek":
+      case "stepfun":
+      case "stepfun-cn":
         // Credit balance — remainingPercentage only (no absolute remaining).
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([name, quota]) => {
@@ -708,6 +713,7 @@ export function parseQuotaData(provider, data) {
               total: quota.total || 0,
               resetAt: quota.resetAt || null,
               remainingPercentage: quota.remainingPercentage,
+              displayRemaining: quota.displayRemaining,
             });
           });
         }

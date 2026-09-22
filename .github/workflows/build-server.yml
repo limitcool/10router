@@ -61,11 +61,24 @@ jobs:
           tar czf 10router-server.tar.gz -C app-server .
           ls -la 10router-server.tar.gz
 
+      - name: Generate checksum
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          # Standard `sha256sum -c` format, one file per workflow group: the three
+          # release workflows run in parallel, so a single shared SHA256SUMS.txt
+          # would race (last writer wins, silently dropping the other groups).
+          # 怎么核对（以及这层校验挡不了什么）见 docs/zh-CN/verify-downloads.md
+          sha256sum 10router-server.tar.gz > SHA256SUMS-server.txt
+          cat SHA256SUMS-server.txt
+
       - uses: actions/upload-artifact@v4
         if: "!startsWith(github.ref, 'refs/tags/v')"
         with:
           name: 10router-server
-          path: 10router-server.tar.gz
+          path: |
+            10router-server.tar.gz
+            SHA256SUMS-server.txt
           if-no-files-found: error
 
       # 确保 release 存在且带标题——否则第一个 attach 文件的 step 会用空 body/裸 tag 名创建它。
@@ -88,7 +101,9 @@ jobs:
           # maintained manually per release. This step must only attach files —
           # anything hardcoded below would overwrite the real release notes on
           # every re-run/re-tag.
-          files: 10router-server.tar.gz
+          files: |
+            10router-server.tar.gz
+            SHA256SUMS-server.txt
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

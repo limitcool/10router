@@ -414,8 +414,28 @@ function setState(next) {
     rebuildMenu();
 }
 
+// 磁盘版本标记（与 npm CLI / fpk 安装路径对齐）：内容 = 内嵌服务（resources/app）的版本。
+// 桌面版不走 cli/cli.js（直接 spawn custom-server.js），没人替它写这个标记，
+// 于是仪表盘的「已安装版本 ≠ 运行中构建」横幅在桌面安装上永远不会亮 —— 而那正是
+// chunk 500 白屏（issue #24）最需要被提示的场景：壳已经换成新构建，旧的服务进程
+// 还占着端口在服务（HTML 引的 chunk 已从磁盘删除）。写失败不致命，横幅退化成不显示。
+function writeDiskVersionMarker() {
+    try {
+        const version = getServiceVersion();
+        if (!version) return;
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(path.join(DATA_DIR, '.disk-version'), version, 'utf8');
+    } catch (err) {
+        log(`disk-version marker write failed: ${err && err.message}`);
+    }
+}
+
 async function startServer() {
     if (nodeProc || state === 'running' || state === 'starting') return;
+
+    // 先落盘版本标记，再判断端口：即使下面走「端口已被外部服务占用」分支
+    // （旧版服务还在跑），运行中的旧服务也能读到新版本并亮出横幅。
+    writeDiskVersionMarker();
 
     // 端口已被占用且健康 → 视为外部已有服务在跑(npm CLI 或手动启动),直接打开界面
     if (await checkHealth()) {

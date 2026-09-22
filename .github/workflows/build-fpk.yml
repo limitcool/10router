@@ -134,10 +134,21 @@ jobs:
               --notes "Release notes pending — see [CHANGELOG.md](https://github.com/techysy/10router/blob/main/CHANGELOG.md)."
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Generate checksum
+        run: |
+          set -euo pipefail
+          # 校验清单供下载方自行核对（标准 `sha256sum -c` 格式）。三个发布工作流并行
+          # 运行，所以每组各自一份，不用共享的 SHA256SUMS.txt（会互相覆盖）。
+          # 怎么核对见 docs/zh-CN/verify-downloads.md
+          ( cd fpk-assets && sha256sum 10router-*.fpk > SHA256SUMS-fpk.txt )
+          cat fpk-assets/SHA256SUMS-fpk.txt
+
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: fpk-assets/10router-*.fpk
+          files: |
+            fpk-assets/10router-*.fpk
+            fpk-assets/SHA256SUMS-fpk.txt
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

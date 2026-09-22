@@ -14,7 +14,13 @@ const COLORS = {
   cyan: "\x1b[36m"
 };
 
-const DEFAULT_PASSWORD = "123456";
+// Fresh random dashboard password for the reset flow. Deliberately not a
+// literal: resetting used to restore the old public default, which is the
+// resurrection path the issue #9 audit called out (a guessable password plus a
+// 0.0.0.0 listener).
+function generatePassword() {
+  return require("crypto").randomBytes(12).toString("base64url");
+}
 
 /**
  * Show settings menu (tunnel + RTK + reset password)
@@ -182,22 +188,34 @@ async function toggleHeadroom(currentlyOn) {
 }
 
 /**
- * Reset dashboard password to default via server API (writes the live SQLite DB).
- * After reset, user can log in with the default password "123456".
+ * Reset the dashboard password: clear the stored hash through the local-only
+ * server route, then set a freshly generated random one and show it exactly
+ * once. The route itself never returns a password, so the CLI mints it here -
+ * the whole point is that nobody, including the operator, knows it in advance.
  */
 async function resetPassword() {
-  const ok = await confirm(t("menus.settings.resetPwConfirm", { default: DEFAULT_PASSWORD }));
+  const ok = await confirm(t("menus.settings.resetPwConfirm"));
   if (!ok) {
     showStatus(t("menus.settings.cancelled"), "info");
     await pause();
     return;
   }
 
-  const result = await api.resetPassword();
-  if (result.success) {
-    showStatus(t("menus.settings.resetPwDone", { default: DEFAULT_PASSWORD }), "success");
+  const cleared = await api.resetPassword();
+  if (!cleared.success) {
+    showStatus(t("menus.settings.resetPwFailed", { error: cleared.error }), "error");
+    await pause();
+    return;
+  }
+
+  // With no hash stored the settings PATCH takes the first-set branch, so no
+  // current password is required here.
+  const generated = generatePassword();
+  const saved = await api.updateSettings({ newPassword: generated });
+  if (saved && saved.error) {
+    showStatus(t("menus.settings.resetPwFailed", { error: saved.error }), "error");
   } else {
-    showStatus(t("menus.settings.resetPwFailed", { error: result.error }), "error");
+    showStatus(t("menus.settings.resetPwDone", { password: generated }), "success");
   }
   await pause();
 }

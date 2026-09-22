@@ -1,5 +1,5 @@
 import { detectFormat, getTargetFormat, resolveTransport } from "../services/provider.js";
-import { translateRequest } from "../translator/index.js";
+import { translateRequest, needsTranslation } from "../translator/index.js";
 import { applyThinking, extractThinking, stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
 import { FORMATS } from "../translator/formats.js";
 import { normalizeClaudePassthrough, anchorClaudeCache } from "../translator/formats/claude.js";
@@ -16,8 +16,9 @@ import { getExecutor } from "../executors/index.js";
 import { supportsGrokCliReasoningEffort } from "../config/grokCli.js";
 import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDetail.js";
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
-import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
+import { handleNonStreamingResponse, translateNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
+import { applyStopSequenceGuard, collectStopSequences, StopSequenceGuard } from "../utils/stopSequenceGuard.js";
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
@@ -28,7 +29,7 @@ import { compressWithPxpipe } from "../rtk/pxpipe.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
-import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
+import { defaultClaudeToolType, shouldDefaultClaudeToolType, sanitizeToolSchemas, shouldSanitizeToolSchemas } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isFreeModel, formatFreeRateLimitMessage } from "../utils/freeModel.js";
 
@@ -264,6 +265,16 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     translatedBody.tools = defaultClaudeToolType(translatedBody.tools);
   }
 
+  // Strict-gateway tool-schema downgrade (issue #27): cbcn answers 400/11129
+  // for any tool whose ROOT `parameters` is not a concrete type:"object"
+  // (root anyOf/oneOf/allOf/$ref/type-array/missing-type). Only providers that
+  // declare the `sanitizeToolSchema` quirk get it — nested schemas are left
+  // untouched, so valid tools pass through unchanged. Fixes OpenClaw and ZCode
+  // auto-generated toolsets that route through cbcn.
+  if (shouldSanitizeToolSchemas(provider, translatedBody.tools, PROVIDERS)) {
+    translatedBody.tools = sanitizeToolSchemas(translatedBody.tools);
+  }
+
   // Per-request opt-out: client can bypass all token savers via header
   const tokenSaverEnabled = clientRawRequest?.headers?.[TOKEN_SAVER_HEADER]?.toLowerCase() !== "off";
 
@@ -475,13 +486,47 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     return createErrorResult(statusCode, errMsg, resetsAtMs);
   }
 
+  // The client asked the model to halt at a stop sequence. Some upstreams accept
+  // `stop`/`stop_sequences` and then ignore it (measured on CodeBuddy CN), which
+  // silently breaks any client that relies on the sequence to bound the turn —
+  // Claude Code's auto-mode classifier chief among them (issue #18): its stage 1
+  // stops on "</block>" and its parser then requires stop_reason to be
+  // stop_sequence/end_turn, so an ignored stop plus a 64-token cap reads as
+  // "classifier unavailable". Enforce the contract on the SSE relay ourselves.
+  // Compliant providers are unaffected: they already excluded the sequence, so
+  // the scan finds nothing and the stream is relayed byte-for-byte.
+  //
+  // Read the CLIENT's body as well as the outbound one: the client's request is
+  // the real statement of intent, and a stop that no translator mapped into the
+  // upstream dialect must still be honoured.
+  const requestedStops = [...new Set([...collectStopSequences(body), ...collectStopSequences(finalBody || translatedBody)])];
+  if (requestedStops.length > 0 && providerResponse.body) {
+    const upstreamContentType = providerResponse.headers.get("content-type") || "";
+    if (upstreamContentType.includes("text/event-stream")) {
+      providerResponse = new Response(applyStopSequenceGuard(providerResponse.body, new StopSequenceGuard(requestedStops)), {
+        status: providerResponse.status,
+        statusText: providerResponse.statusText,
+        headers: providerResponse.headers,
+      });
+    }
+  }
+
+  // Translates an aggregated provider-format body into the caller's dialect. The
+  // forced-SSE-to-JSON path needs it too (a Claude client routed to a
+  // force-stream provider used to receive a raw chat.completion body); it is
+  // injected rather than imported there, which would be a cycle.
+  const translateToClientFormat = (rawBody) =>
+    needsTranslation(providerResponseFormat, sourceFormat)
+      ? translateNonStreamingResponse(rawBody, providerResponseFormat, sourceFormat, customToolNames)
+      : rawBody;
+
   const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 
   // Provider forced streaming but client wants JSON
   if (!clientRequestedStreaming && providerRequiresStreaming) {
-    const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, customToolNames, trackDone, appendLog });
+    const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, customToolNames, translateToClientFormat, trackDone, appendLog });
     if (result) { streamController.handleComplete(); return result; }
   }
 

@@ -5,7 +5,7 @@
     "en": "Sync ZCode, OpenCode, mirasim, Xiaomi MiMo's local model-usage ledger, or another 10Router/9Router instance's usage into 10Router via /api/settings/database/import-usage (Bearer virtual key or dashboard password); and monitor a 10Router instance's live status (channel breakers, account health, usage). Adds the /10router-sync:sync-usage and /10router-sync:status commands and a usage-sync skill.",
     "zh-CN": "将 ZCode/OpenCode/mirasim/小米MiMo 本地模型调用用量（或另一个 10Router/9Router 实例的用量）导出并导入 10Router（/api/settings/database/import-usage，支持虚拟 key 或仪表盘密码鉴权）；并查看 10Router 实例实时状态（渠道熔断、账号健康、用量统计）。提供 /10router-sync:sync-usage 与 /10router-sync:status 命令及 usage-sync 技能。"
   },
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": {
     "name": "techysy",
     "url": "https://github.com/techysy"

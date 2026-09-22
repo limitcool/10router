@@ -87,12 +87,26 @@ else
     echo "[$(date '+%F %T')] ERROR: online build did not produce .next-cli-build (check install.log)" >> "${LOG}"
 fi
 
-# 确保初始密码不是开发占位值 change-me (修正 server 内 .env / .env.example)
+# 确保初始密码不是开发占位值 change-me（修正 server 内 .env / .env.example）
+# 不再换成 123456：公开口令 + 0.0.0.0 监听 = 局域网内任何人一步拿到管理员权限和全部
+# 上游凭据（issue #9）。改成随机值写入 .env，并把密码记录到安装日志（只提示这一次，
+# 登录后请在 Web UI「设置」页修改）。
+gen_initial_password() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -base64 12 2>/dev/null | tr -d '/+=' | cut -c1-16
+    else
+        head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n'
+    fi
+}
 for envf in "${SRC_DIR}/.env" "${SRC_DIR}/.env.example"; do
     if [ -f "$envf" ]; then
         if grep -q '^INITIAL_PASSWORD=change-me' "$envf" 2>/dev/null; then
-            sed -i 's/^INITIAL_PASSWORD=change-me.*/INITIAL_PASSWORD=123456/' "$envf" 2>/dev/null || true
-            echo "[$(date '+%F %T')] fixed INITIAL_PASSWORD=change-me -> 123456 in $envf" >> "${LOG}"
+            newpw="$(gen_initial_password)"
+            if [ -n "$newpw" ]; then
+                sed -i "s|^INITIAL_PASSWORD=change-me.*|INITIAL_PASSWORD=${newpw}|" "$envf" 2>/dev/null || true
+                echo "[$(date '+%F %T')] replaced placeholder INITIAL_PASSWORD with a random value in $envf" >> "${LOG}"
+                echo "[$(date '+%F %T')] dashboard password for the first login: ${newpw}" >> "${LOG}"
+            fi
         fi
     fi
 done

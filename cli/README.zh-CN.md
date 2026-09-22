@@ -88,10 +88,59 @@ Claude Code / Codex / OpenClaw / Cursor / Cline 设置：
 10router --port 8080        # 自定义端口
 10router --no-browser       # 不自动打开浏览器
 10router --skip-update      # 跳过更新检查
+10router --tray             # 以系统托盘模式运行
+10router --no-tray          # 不创建托盘图标（无桌面环境）
 10router --help             # 查看全部参数
 ```
 
 **仪表盘**：`http://localhost:20128/dashboard`
+
+### 无桌面 / 后台常驻（nohup / systemd）
+
+没有终端时，`10router` 会忽略 `SIGHUP`：关掉终端或退出登录不再把网关一起带走，因此后台启动能活过启动它的那个 shell。服务器、容器、systemd 单元这类没有桌面可画图标的环境，加上 `--no-tray` 可以省掉注定失败的托盘初始化；`--no-browser` 则跳过同样打不开的浏览器：
+
+```bash
+# shell 退出后继续运行
+nohup 10router --no-tray --no-browser >~/.10router/10router.log 2>&1 &
+```
+
+```ini
+# ~/.config/systemd/user/10router.service
+[Unit]
+Description=10Router gateway
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/share/npm/bin/10router --no-tray --no-browser
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user enable --now 10router
+```
+
+---
+
+## 🩺 排查问题
+
+`10router doctor` 检查当前安装并打印问题所在，全程不改动任何东西：
+
+```bash
+10router doctor                 # 人类可读报告
+10router doctor --json          # 结构稳定，便于贴进工单或 CI
+10router doctor --port 20129    # 检查其他端口
+```
+
+它会核对三处版本(启动器、磁盘标记、真正在服务的那个)、上次构建残留的服务、
+实际用了哪个 SQLite 驱动、运行时依赖、端口、托盘、构建是否完整、数据目录。
+不会安装、修复、重启或结束任何进程；只要确实有问题就以非 0 退出码结束，
+因此放进 CI 或直接贴到 issue 里都是安全的。
+
+> 标红是「事实」，不一定都要修：在源码目录里跑 `doctor`，而服务由已安装的构建
+> 提供，就会报版本不一致 —— 因为它们确实是两份不同的构建。
 
 ---
 

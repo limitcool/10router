@@ -5,29 +5,25 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Card, Badge, Button, Toggle, AddCustomEmbeddingModal } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
+import DraggableCard from "@/shared/components/DraggableCard";
 import { MEDIA_PROVIDER_KINDS, AI_PROVIDERS, getProvidersByKind } from "@/shared/constants/providers";
+import {
+  computeConnectionStats,
+  buildProviderCardComparator,
+  moveCardInOrder,
+  saveProviderCardOrder,
+} from "@/shared/utils/providerCardOrder";
 
 // Kinds that support combos (currently disabled for image/tts — temporarily hidden).
 // webSearch/webFetch handled by /web page.
 const COMBO_KINDS = new Set([]);
 const COMBO_BASE_NAMES = { image: "image-combo", tts: "tts-combo" };
 
-function getEffectiveStatus(conn) {
-  const isCooldown = Object.entries(conn).some(
-    ([k, v]) => k.startsWith("modelLock_") && v && new Date(v).getTime() > Date.now()
-  );
-  return conn.testStatus === "unavailable" && !isCooldown ? "active" : conn.testStatus;
-}
-
 function MediaProviderCard({ provider, kind, connections, isCustom, onToggle }) {
   const providerInfo = AI_PROVIDERS[provider.id];
   const isNoAuth = !!providerInfo?.noAuth;
 
-  const providerConns = connections.filter((c) => c.provider === provider.id);
-  const connected = providerConns.filter((c) => { const s = getEffectiveStatus(c); return s === "active" || s === "success"; }).length;
-  const error = providerConns.filter((c) => { const s = getEffectiveStatus(c); return s === "error" || s === "expired" || s === "unavailable"; }).length;
-  const total = providerConns.length;
-  const allDisabled = total > 0 && providerConns.every((c) => c.isActive === false);
+  const { connected, error, total, allDisabled } = computeConnectionStats(connections, provider.id);
 
   const handleToggleClick = (e) => {
     e.preventDefault();
@@ -143,6 +139,9 @@ export default function MediaProviderKindPage() {
   const [connections, setConnections] = useState([]);
   const [customNodes, setCustomNodes] = useState([]);
   const [combos, setCombos] = useState([]);
+  const [cardOrder, setCardOrder] = useState([]);
+  const [draggingCardId, setDraggingCardId] = useState(null);
+  const [dragOverCardId, setDragOverCardId] = useState(null);
   const [showAddCustomEmbedding, setShowAddCustomEmbedding] = useState(false);
 
   // webSearch/webFetch listing pages are merged into /web
@@ -162,6 +161,12 @@ export default function MediaProviderKindPage() {
       .then((r) => r.json())
       .then((d) => setConnections(d.connections || []))
       .catch(() => {});
+    fetch("/api/settings", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d.providerCardOrder)) setCardOrder(d.providerCardOrder);
+      })
+      .catch(() => {});
     if (isEmbedding) {
       fetch("/api/provider-nodes", { cache: "no-store" })
         .then((r) => r.json())
@@ -180,6 +185,27 @@ export default function MediaProviderKindPage() {
 
   const providers = getProvidersByKind(kind);
   const kindCombos = combos.filter((c) => c.kind === kind);
+
+  // Same ordering as the main providers page: connection state → manual drag
+  // order → registry priority → name (shared/utils/providerCardOrder.js).
+  const cardComparator = buildProviderCardComparator({
+    cardOrder,
+    statsOf: (id) => computeConnectionStats(connections, id),
+    infoOf: (id) => AI_PROVIDERS[id],
+  });
+  const sortedProviders = [...providers].sort((a, b) => cardComparator(a.id, b.id));
+
+  const handleCardDrop = (targetId) => {
+    const sourceId = draggingCardId;
+    setDraggingCardId(null);
+    setDragOverCardId(null);
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    setCardOrder((prev) => {
+      const next = moveCardInOrder(prev, providers.map((p) => p.id), sourceId, targetId);
+      if (next !== prev) saveProviderCardOrder(next).catch(() => {});
+      return next;
+    });
+  };
 
   // Map custom nodes to MediaProviderCard shape
   const customProviders = customNodes.map((n) => ({
@@ -252,14 +278,27 @@ export default function MediaProviderKindPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {providers.map((provider) => (
-            <MediaProviderCard
+          {sortedProviders.map((provider) => (
+            <DraggableCard
               key={provider.id}
-              provider={provider}
-              kind={kind}
-              connections={connections}
-              onToggle={handleToggleProvider}
-            />
+              cardId={provider.id}
+              isDragging={draggingCardId === provider.id}
+              isOver={dragOverCardId === provider.id && draggingCardId !== provider.id}
+              onDragStart={setDraggingCardId}
+              onDragOver={setDragOverCardId}
+              onDrop={handleCardDrop}
+              onDragEnd={() => {
+                setDraggingCardId(null);
+                setDragOverCardId(null);
+              }}
+            >
+              <MediaProviderCard
+                provider={provider}
+                kind={kind}
+                connections={connections}
+                onToggle={handleToggleProvider}
+              />
+            </DraggableCard>
           ))}
           {customProviders.map((provider) => (
             <MediaProviderCard

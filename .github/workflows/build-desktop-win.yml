@@ -84,6 +84,13 @@ jobs:
           fi
           # 7z 是数据载荷 (非 PE 文件), 不经签名, 始终取原始产物
           cp desktop/dist/nsis-web/*.nsis.7z release-files/
+          # 校验清单供下载方自行核对 (标准 `sha256sum -c` 格式)。三个发布工作流
+          # 并行运行, 所以每组各自一份, 不用共享的 SHA256SUMS.txt (会互相覆盖)。
+          # 列出显式扩展名 (不用 `*`): 否则重跑时会把上一轮的 SHA256SUMS-*.txt
+          # 也算进清单, 而 `> file` 会在 sha256sum 读取前先把它截断。
+          # 怎么核对见 docs/zh-CN/verify-downloads.md
+          ( cd release-files && shopt -s nullglob && sha256sum *.exe *.7z > SHA256SUMS-desktop.txt )
+          cat release-files/SHA256SUMS-desktop.txt
           ls -la release-files/
 
       # 确保 release 存在且带标题——否则第一个 attach 文件的 step 会用空 body/裸 tag 名创建它。

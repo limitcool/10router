@@ -1,10 +1,14 @@
-import Database from "better-sqlite3";
 import { PRAGMA_SQL } from "../schema.js";
 
 // Periodic checkpoint to keep WAL file small (avoid huge -wal/-shm growth)
 const CHECKPOINT_INTERVAL_MS = 60 * 1000;
 
-export function createBetterSqliteAdapter(filePath) {
+// `Database` is injected rather than imported: the module the app should use is
+// the runtime copy under <dataDir>/runtime/node_modules, which is NOT reachable
+// from this file's location by bare specifier (that would resolve upward through
+// the global tree first). driver.js resolves it and passes it in — see
+// loadBetterSqlite() there.
+export function createBetterSqliteAdapter(filePath, Database) {
   const db = new Database(filePath);
   db.exec(PRAGMA_SQL);
   // Schema is created/synced by migrate.js after adapter init

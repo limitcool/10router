@@ -26,7 +26,10 @@ const { setDashboardAuthCookie, createDashboardAuthToken } = await import(
 );
 const { decodeJwt } = await import("jose");
 
-const EXPECTED_MAX_AGE_SEC = 24 * 60 * 60;
+// Issue #9, item 8: shortened from 24h. A leaked cookie used to stay usable for
+// a whole day; it now expires in two hours, which is only comfortable because the
+// session slides (see renewDashboardAuthCookie and the test at the bottom).
+const EXPECTED_MAX_AGE_SEC = 2 * 60 * 60;
 
 function captureCookieSet() {
   const calls = [];
@@ -60,7 +63,7 @@ beforeEach(() => {
 });
 
 describe("setDashboardAuthCookie", () => {
-  it("sets httpOnly auth_token with a 24h maxAge, not a session cookie", async () => {
+  it("sets httpOnly auth_token with a lifetime maxAge, not a session cookie", async () => {
     const { calls, store } = captureCookieSet();
     await setDashboardAuthCookie(store, requestWithProto("http"));
 
@@ -80,7 +83,7 @@ describe("setDashboardAuthCookie", () => {
 
   it("keeps the token expiry equal to the cookie maxAge", async () => {
     // The two must never drift — that drift is exactly what caused the bug
-    // (24h token, session-scoped cookie).
+    // (token with an exp, session-scoped cookie).
     const { calls, store } = captureCookieSet();
     await setDashboardAuthCookie(store, requestWithProto("http"));
 

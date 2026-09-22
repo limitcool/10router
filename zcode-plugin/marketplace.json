@@ -9,7 +9,7 @@
         "en": "Sync ZCode, OpenCode, mirasim, Xiaomi MiMo's local model-usage ledger, or another 10Router/9Router instance's usage into 10Router (/api/settings/database/import-usage); and monitor a 10Router instance's live status (channel breakers, account health, usage).",
         "zh-CN": "将 ZCode/OpenCode/mirasim/小米MiMo 本地模型调用用量（或另一个 10Router/9Router 实例的用量）导出并导入 10Router；并查看 10Router 实例实时状态（渠道熔断、账号健康、用量统计）。"
       },
-      "version": "1.4.0",
+      "version": "1.5.0",
       "source": "./"
     }
   ]

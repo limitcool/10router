@@ -145,3 +145,94 @@ describe("fetchPublic: redirect-target re-validation from #3714", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
+
+describe("Issue #25: self-hosted private hosts opt-in via env", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe("ALLOW_PRIVATE_HOSTS=1 (master toggle)", () => {
+    beforeEach(() => {
+      vi.stubEnv("ALLOW_PRIVATE_HOSTS", "1");
+    });
+
+    it("allows literal private/loopback/metadata addresses in assertPublicUrl", () => {
+      const privateUrls = [
+        "http://127.0.0.1/",
+        "http://10.0.0.1/",
+        "http://172.16.0.1/",
+        "http://192.168.1.1/",
+        "http://169.254.169.254/",
+        "http://localhost/",
+        "http://foo.internal/",
+        "http://[::1]/",
+        "http://[fc00::1]/",
+      ];
+      for (const url of privateUrls) {
+        expect(() => assertPublicUrl(url), url).not.toThrow();
+      }
+    });
+
+    it("allows literal private IPs in assertPublicUrlResolved without DNS lookup", async () => {
+      lookupMock.mockReset();
+      await expect(assertPublicUrlResolved("http://127.0.0.1:8080/v1")).resolves.not.toThrow();
+      await expect(assertPublicUrlResolved("http://172.18.0.5:8317/v1")).resolves.not.toThrow();
+      expect(lookupMock).not.toHaveBeenCalled();
+    });
+
+    it("allows internal hosts resolving to private IPs in assertPublicUrlResolved", async () => {
+      lookupMock.mockReset();
+      lookupMock.mockResolvedValue([{ address: "172.18.0.5", family: 4 }]);
+      await expect(assertPublicUrlResolved("http://cli-proxy-api-plus:8317/v1")).resolves.not.toThrow();
+    });
+
+    it("allows fetchPublic to connect to private targets", async () => {
+      const originalFetch = global.fetch;
+      try {
+        global.fetch = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+        const res = await fetchPublic("http://127.0.0.1:8317/v1/models");
+        expect(await res.text()).toBe("ok");
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe("PRIVATE_HOST_ALLOWLIST (granular allowlist)", () => {
+    beforeEach(() => {
+      vi.stubEnv("PRIVATE_HOST_ALLOWLIST", "my-node,host.docker.internal,192.168.1.50");
+      lookupMock.mockReset();
+    });
+
+    it("allows exact matching hostnames in allowlist", async () => {
+      expect(() => assertPublicUrl("http://my-node:8317/v1")).not.toThrow();
+      await expect(assertPublicUrlResolved("http://my-node:8317/v1")).resolves.not.toThrow();
+    });
+
+    it("normalizes case and trailing dots for allowlist matching", async () => {
+      expect(() => assertPublicUrl("http://MY-NODE.:8317/v1")).not.toThrow();
+      await expect(assertPublicUrlResolved("http://MY-NODE.:8317/v1")).resolves.not.toThrow();
+    });
+
+    it("still blocks unlisted private literal IPs", () => {
+      expect(() => assertPublicUrl("http://10.0.0.1/")).toThrow();
+      expect(() => assertPublicUrl("http://127.0.0.1/")).toThrow();
+    });
+
+    it("allows specifically allowlisted literal IP addresses", () => {
+      expect(() => assertPublicUrl("http://192.168.1.50:8080/")).not.toThrow();
+    });
+
+    it("blocks subdomain or suffix spoofing (exact match only)", async () => {
+      lookupMock.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+      await expect(assertPublicUrlResolved("http://my-node.evil.com/")).rejects.toThrow(/internal host/);
+      await expect(assertPublicUrlResolved("http://evil-my-node/")).rejects.toThrow();
+    });
+
+    it("allows hostname when resolved IP is in the allowlist", async () => {
+      lookupMock.mockResolvedValue([{ address: "192.168.1.50", family: 4 }]);
+      await expect(assertPublicUrlResolved("http://custom-dns.example.test/")).resolves.not.toThrow();
+    });
+  });
+});

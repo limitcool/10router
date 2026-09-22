@@ -31,6 +31,8 @@ vi.mock("@/shared/utils/machineId", () => ({
 
 vi.mock("@/lib/auth/dashboardSession", () => ({
   verifyDashboardAuthToken: mocks.verifyDashboardAuthToken,
+  // Steady state: a password exists, so the bootstrap-loopback rule stays off.
+  isDashboardAuthConfigured: () => true,
 }));
 
 const { proxy } = await import("../../src/dashboardGuard.js");

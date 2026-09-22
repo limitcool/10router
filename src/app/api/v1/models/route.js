@@ -1,11 +1,14 @@
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS, getModelKind } from "@/shared/constants/models";
 import {
   AI_PROVIDERS,
+  ALIAS_TO_ID,
   getProviderAlias,
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
 } from "@/shared/constants/providers";
-import { getProviderConnections, getProviderNodes, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
+import { buildProviderOrderComparator } from "@/shared/utils/modelListOrder";
+import { getProviderConnections, getProviderNodes, getCombos, getCustomModels, getModelAliases, getSettings } from "@/lib/localDb";
+import { getAllModelCaps } from "@/lib/modelCapsDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
@@ -266,6 +269,13 @@ function comboMatchesKinds(combo, kindFilter) {
   return kindFilter.includes(kind);
 }
 
+// Positive-integer coercion for user-entered/stored token counts (may arrive
+// as strings from custom model rows); null when absent or invalid.
+const posNum = (v) => {
+  const n = typeof v === "string" ? Number(v) : v;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+};
+
 /**
  * Build OpenAI-format models list filtered by service kinds.
  * @param {string[]} kindFilter - List of service kinds to include (e.g. ["llm"], ["webSearch","webFetch"]).
@@ -369,7 +379,73 @@ export async function buildModelsList(kindFilter, options = {}) {
     }
   }
 
-  const models = [];
+  // The user's latest provider order: settings.providerCardOrder is written by
+  // the dashboard's drag-and-drop card reordering (array of provider ids). The
+  // model list must expose providers in that same order — otherwise clients
+  // keep seeing raw DB insertion order while the UI says something else.
+  // One final rank sort (see emit/ordered at the bottom) is the single source
+  // of ordering, so connected providers and noAuth orphan custom models
+  // interleave exactly like the dashboard (where visible noAuth share the top
+  // rank with connected). Tie-breaks mirror the dashboard comparator via the
+  // shared helper: manual order → registry priority → name.
+  let providerCardOrder = [];
+  try {
+    const settings = await getSettings();
+    if (Array.isArray(settings?.providerCardOrder)) providerCardOrder = settings.providerCardOrder;
+  } catch (e) {
+    console.log("Could not fetch provider card order:", e?.message);
+  }
+  // User-pinned per-model context window / max output (dashboard overrides).
+  // Published under every provider name spelling, like getDisabledModels().
+  // Fail-open: clients may not override anything, but must still get a list.
+  let capsOverrides = {};
+  try {
+    const ov = await getAllModelCaps();
+    if (ov && typeof ov === "object") capsOverrides = ov;
+  } catch (e) {
+    console.log("Could not fetch model caps overrides:", e?.message);
+  }
+  const compareProviders = buildProviderOrderComparator({
+    cardOrder: providerCardOrder,
+    aliasToId: ALIAS_TO_ID,
+    priorityOf: (id) => AI_PROVIDERS[id]?.priority,
+  });
+  // Resolve every provider that can appear in this response to one ordinal up
+  // front, ranked together by the comparator — so connected providers and
+  // noAuth orphan custom models interleave under exactly the dashboard's rule
+  // (visible noAuth shares the top card rank with connected).
+  const canonicalProvider = (idOrAlias) => ALIAS_TO_ID[idOrAlias] || idOrAlias;
+  const groupRank = new Map();
+  {
+    const present = new Set(activeConnectionByProvider.keys());
+    for (const cm of customModels) {
+      if (cm?.id && cm?.providerAlias) present.add(String(cm.providerAlias));
+    }
+    if (connections.length === 0 && !dbAvailable) {
+      for (const alias of Object.keys(PROVIDER_MODELS)) present.add(alias);
+    }
+    [...present].sort(compareProviders).forEach((key, i) => {
+      const cid = canonicalProvider(key);
+      if (!groupRank.has(cid)) groupRank.set(cid, i);
+    });
+  }
+  const COMBO_RANK = -1; // combos lead the list, ahead of every provider group
+  const rankOf = (idOrAlias) => {
+    const r = groupRank.get(canonicalProvider(idOrAlias || ""));
+    return r === undefined ? Number.MAX_SAFE_INTEGER : r;
+  };
+
+  // Tagged accumulator: final list = stable sort by (rank, seq), so a
+  // provider's own models keep insertion order while the provider groups
+  // themselves land in the user's card order. This replaces pushing into one
+  // array in loop order, which could not interleave orphan providers.
+  const tagged = [];
+  let seq = 0;
+  const emit = (model, rank) => { tagged.push({ model, rank, seq: seq++ }); };
+  const orderedModels = () => {
+    tagged.sort((a, b) => (a.rank - b.rank) || (a.seq - b.seq));
+    return tagged.map((t) => t.model);
+  };
 
   // Combos first (filtered by kind). Web combos expose `kind` so AI knows search vs fetch.
   for (const combo of combos) {
@@ -382,7 +458,7 @@ export async function buildModelsList(kindFilter, options = {}) {
     if (combo.kind === "webSearch" || combo.kind === "webFetch") {
       entry.kind = combo.kind;
     }
-    models.push(entry);
+    emit(entry, COMBO_RANK);
   }
 
   if (connections.length === 0) {
@@ -403,11 +479,11 @@ export async function buildModelsList(kindFilter, options = {}) {
         for (const model of providerModels) {
           if (!kindFilter.includes(modelKind(model))) continue;
           if (isDisabled(alias, model.id)) continue;
-          models.push({
+          emit({
             id: `${alias}/${model.id}`,
             object: "model",
             owned_by: alias,
-          });
+          }, rankOf(providerId));
         }
       }
     }
@@ -425,11 +501,19 @@ export async function buildModelsList(kindFilter, options = {}) {
       const modelId = String(customModel.id).trim();
       if (!modelId) continue;
 
-      models.push({
+      const entry = {
         id: `${providerAlias}/${modelId}`,
         object: "model",
         owned_by: providerAlias,
-      });
+      };
+      // Fix: honor the stored contextWindow/maxOutput of user-added custom
+      // models (previously dropped here), with the dashboard override on top.
+      const pinned = capsOverrides[providerAlias]?.[modelId];
+      const cw = pinned?.contextWindow ?? posNum(customModel.contextWindow);
+      const mo = pinned?.maxOutput ?? posNum(customModel.maxOutput);
+      if (cw) entry.context_length = cw;
+      if (mo) entry.max_completion_tokens = mo;
+      emit(entry, rankOf(providerAlias));
     }
   } else {
     for (const [providerId, conn] of activeConnectionByProvider.entries()) {
@@ -513,6 +597,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         .filter((modelId) => typeof modelId === "string" && modelId.trim() !== "");
 
       const customModelKindById = new Map();
+      const customModelCapsById = new Map();
       const customModelIds = customModels
         .filter((m) => {
           if (!m?.id) return false;
@@ -528,7 +613,10 @@ export async function buildModelsList(kindFilter, options = {}) {
         })
         .map((m) => {
           const modelId = String(m.id).trim();
-          if (modelId) customModelKindById.set(modelId, getModelKind(m) || LLM_KIND);
+          if (modelId) {
+            customModelKindById.set(modelId, getModelKind(m) || LLM_KIND);
+            customModelCapsById.set(modelId, m);
+          }
           return modelId;
         })
         .filter((modelId) => modelId !== "");
@@ -557,6 +645,9 @@ export async function buildModelsList(kindFilter, options = {}) {
         .filter((modelId) => typeof modelId === "string" && modelId.trim() !== "");
 
       const mergedModelIds = Array.from(new Set([...modelIds, ...customModelIds, ...aliasModelIds]));
+      // Dashboard-pinned caps for this provider, under any name spelling.
+      const providerCaps =
+        capsOverrides[providerId] || capsOverrides[staticAlias] || capsOverrides[outputAlias] || null;
 
       for (const modelId of mergedModelIds) {
         // Resolve kind: prefer custom/live metadata, then static, then ID heuristics.
@@ -602,29 +693,47 @@ export async function buildModelsList(kindFilter, options = {}) {
             if (!Number.isFinite(contextWindow)) contextWindow = fallback.contextWindow;
             if (!Number.isFinite(maxOutput)) maxOutput = fallback.maxOutput;
           }
+          // A user-added custom model's stored window belongs to THIS model, so
+          // it beats the generic catalog default; an explicit dashboard
+          // override (modelCaps) beats everything.
+          const customRow = customModelCapsById.get(modelId);
+          if (customRow) {
+            const c = posNum(customRow.contextWindow);
+            const o = posNum(customRow.maxOutput);
+            if (c) contextWindow = c;
+            if (o) maxOutput = o;
+          }
+          const pinned = providerCaps?.[modelId];
+          if (pinned?.contextWindow) contextWindow = pinned.contextWindow;
+          if (pinned?.maxOutput) maxOutput = pinned.maxOutput;
+          // Keep the nested block in sync with the snake_case values above.
+          if (caps) {
+            if (Number.isFinite(contextWindow)) caps.contextWindow = contextWindow;
+            if (Number.isFinite(maxOutput)) caps.maxOutput = maxOutput;
+          }
           if (Number.isFinite(contextWindow)) model.context_length = contextWindow;
           if (Number.isFinite(maxOutput)) model.max_completion_tokens = maxOutput;
         }
-        models.push(model);
+        emit(model, rankOf(providerId));
       }
 
       // Web search/fetch — provider IS the model, expose as {alias}/search and/or {alias}/fetch with explicit kind
       const providerInfo = AI_PROVIDERS[providerId];
       if (kindFilter.includes("webSearch") && providerInfo?.searchConfig) {
-        models.push({
+        emit({
           id: `${outputAlias}/search`,
           object: "model",
           kind: "webSearch",
           owned_by: outputAlias,
-        });
+        }, rankOf(providerId));
       }
       if (kindFilter.includes("webFetch") && providerInfo?.fetchConfig) {
-        models.push({
+        emit({
           id: `${outputAlias}/fetch`,
           object: "model",
           kind: "webFetch",
           owned_by: outputAlias,
-        });
+        }, rankOf(providerId));
       }
     }
   }
@@ -661,17 +770,23 @@ export async function buildModelsList(kindFilter, options = {}) {
       const modelId = String(customModel.id).trim();
       if (!modelId) continue;
       if (isDisabled(alias, modelId)) continue;
-      models.push({
+      const entry = {
         id: `${alias}/${modelId}`,
         object: "model",
         owned_by: alias,
-      });
+      };
+      const pinned = capsOverrides[alias]?.[modelId];
+      const cw = pinned?.contextWindow ?? posNum(customModel.contextWindow);
+      const mo = pinned?.maxOutput ?? posNum(customModel.maxOutput);
+      if (cw) entry.context_length = cw;
+      if (mo) entry.max_completion_tokens = mo;
+      emit(entry, rankOf(alias));
     }
   }
 
   const dedupedModels = [];
   const seenModelIds = new Set();
-  for (const model of models) {
+  for (const model of orderedModels()) {
     if (!model?.id || seenModelIds.has(model.id)) continue;
     seenModelIds.add(model.id);
     dedupedModels.push(model);

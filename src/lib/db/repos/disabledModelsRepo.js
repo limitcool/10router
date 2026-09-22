@@ -23,7 +23,9 @@ const SCOPE = "disabledModels";
 
 let keyGroups = null;
 
-async function loadKeyGroups() {
+// Shared with modelCapsRepo: the registry name walk (id/alias/uiAlias/aliases →
+// canonical) is provider metadata, not disabled-models-specific.
+export async function loadKeyGroups() {
   if (keyGroups) return keyGroups;
   const toCanonical = new Map();
   const byCanonical = new Map();

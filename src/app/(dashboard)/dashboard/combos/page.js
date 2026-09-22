@@ -166,8 +166,10 @@ export default function CombosPage() {
     try {
       const updated = { ...comboStrategies };
       const next = { ...(updated[comboName] || {}), ...patch };
-      // Prune to keep settings clean: default fallback with no extras = no entry.
-      if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") {
+      // Prune to keep settings clean: default strategy with no extras = no entry.
+      // retryOnEmpty is an extra that must survive the default "fallback" strategy.
+      const isDefaultStrategy = !next.fallbackStrategy || next.fallbackStrategy === "fallback";
+      if (isDefaultStrategy && !next.retryOnEmpty) {
         delete updated[comboName];
       } else {
         updated[comboName] = next;
@@ -363,6 +365,21 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
               onChange={(e) => onSetStrategy({ fallbackStrategy: e.target.value })}
               selectClassName="py-1.5 text-xs"
             />
+            {/* Issue #10: opt-in empty-answer fallback. Fusion has its own quality
+                pipeline (panel + judge), so the toggle only shows for fallback/RR. */}
+            {current !== "fusion" && (
+              <label
+                className="mt-1 flex cursor-pointer items-center gap-1.5 text-[11px] text-text-muted"
+                title={translate("When the model returns an empty answer (content filter or zero output), fall through to the next model. The abandoned attempt still consumes its input tokens.")}
+              >
+                <Toggle
+                  size="sm"
+                  checked={!!strategy.retryOnEmpty}
+                  onChange={(v) => onSetStrategy({ retryOnEmpty: v })}
+                />
+                <span>{translate("Retry on empty")}</span>
+              </label>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-1 sm:flex">

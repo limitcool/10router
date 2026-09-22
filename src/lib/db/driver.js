@@ -1,8 +1,42 @@
-import { ensureDirs, DATA_FILE } from "./paths.js";
+import path from "node:path";
+import { ensureDirs, DATA_FILE, RUNTIME_DIR } from "./paths.js";
 
 // Use global to survive Next.js dev hot-reload (module state resets on reload)
-if (!global._dbAdapter) global._dbAdapter = { instance: null, initPromise: null, logged: false };
+if (!global._dbAdapter) global._dbAdapter = { instance: null, initPromise: null, logged: false, lastDriverError: null };
 const state = global._dbAdapter;
+
+/**
+ * Resolve better-sqlite3, preferring the runtime copy the CLI installed into
+ * <dataDir>/runtime/node_modules (cli/hooks/sqliteRuntime.js).
+ *
+ * Resolving it by ABSOLUTE path is the point: the app lives under
+ * <prefix>/lib/node_modules/@techysy/10router/app, and Node walks that tree
+ * UPWARD before it ever consults NODE_PATH — so a stale or half-built
+ * better-sqlite3 anywhere above us silently shadows the good runtime copy and
+ * we drop to node:sqlite. Falls back to the bare specifier so nothing breaks
+ * when the runtime copy is absent.
+ *
+ * @returns {Promise<Function|null>} the Database constructor, or null if absent
+ */
+export async function loadBetterSqlite() {
+  try {
+    const { createRequire } = await import("node:module");
+    // Base the resolver one level ABOVE node_modules (a fictitious file inside
+    // <dataDir>/runtime) so the first lookup is exactly
+    // <dataDir>/runtime/node_modules/better-sqlite3.
+    const runtimeRequire = createRequire(path.join(RUNTIME_DIR, "_noop.js"));
+    const mod = runtimeRequire("better-sqlite3");
+    return mod?.default ?? mod;
+  } catch {
+    /* fall through to the bare specifier */
+  }
+  try {
+    const mod = await import("better-sqlite3");
+    return mod?.default ?? mod;
+  } catch {
+    return null;
+  }
+}
 
 async function tryBunSqlite() {
   // Bun runtime only — built-in, no install needed
@@ -11,6 +45,7 @@ async function tryBunSqlite() {
     const { createBunSqliteAdapter } = await import("./adapters/bunSqliteAdapter.js");
     return await createBunSqliteAdapter(DATA_FILE);
   } catch (e) {
+    state.lastDriverError = `bun:sqlite: ${e.message}`;
     console.warn(`[DB] bun:sqlite unavailable: ${e.message}`);
     return null;
   }
@@ -24,9 +59,12 @@ async function tryBetterSqlite() {
   const [nodeMajor] = process.versions.node.split(".").map(Number);
   if (nodeMajor >= 24) return null;
   try {
+    const Database = await loadBetterSqlite();
+    if (!Database) throw new Error("not installed (runtime copy and bare specifier both missing)");
     const { createBetterSqliteAdapter } = await import("./adapters/betterSqliteAdapter.js");
-    return createBetterSqliteAdapter(DATA_FILE);
+    return createBetterSqliteAdapter(DATA_FILE, Database);
   } catch (e) {
+    state.lastDriverError = `better-sqlite3: ${e.message}`;
     console.warn(`[DB] better-sqlite3 unavailable: ${e.message}`);
     return null;
   }
@@ -41,6 +79,7 @@ async function tryNodeSqlite() {
     const { createNodeSqliteAdapter } = await import("./adapters/nodeSqliteAdapter.js");
     return await createNodeSqliteAdapter(DATA_FILE);
   } catch (e) {
+    state.lastDriverError = `node:sqlite: ${e.message}`;
     console.warn(`[DB] node:sqlite unavailable: ${e.message}`);
     return null;
   }
@@ -51,6 +90,7 @@ async function trySqlJs() {
     const { createSqlJsAdapter } = await import("./adapters/sqljsAdapter.js");
     return await createSqlJsAdapter(DATA_FILE);
   } catch (e) {
+    state.lastDriverError = `sql.js: ${e.message}`;
     console.warn(`[DB] sql.js unavailable: ${e.message}`);
     return null;
   }

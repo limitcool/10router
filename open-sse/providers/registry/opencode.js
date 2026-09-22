@@ -13,16 +13,17 @@ export default {
   category: "free",
   noAuth: true,
   community: true,
-  // Free noAuth provider with no connections — hidden from the usage topology
-  // canvas by default (same as mimo-free). Toggle via the topologyVisibility
-  // setting on the providers page.
-  topologyHiddenByDefault: true,
+  // Free noAuth provider with no connections — shown on the usage topology
+  // canvas by default. Toggle via the topologyVisibility setting on the
+  // providers page.
+  topologyHiddenByDefault: false,
   transport: {
     baseUrl: "https://opencode.ai",
     headers: {
       "x-opencode-client": "desktop",
     },
     noAuth: true,
+    forceStream: true,
   },
   models: [
     // Free catalog mirrors the official "limited-time free" list on

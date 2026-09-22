@@ -5,23 +5,19 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, Badge, Button } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
+import DraggableCard from "@/shared/components/DraggableCard";
 import { AI_PROVIDERS, getProvidersByKind } from "@/shared/constants/providers";
-
-function getEffectiveStatus(conn) {
-  const isCooldown = Object.entries(conn).some(
-    ([k, v]) => k.startsWith("modelLock_") && v && new Date(v).getTime() > Date.now()
-  );
-  return conn.testStatus === "unavailable" && !isCooldown ? "active" : conn.testStatus;
-}
+import {
+  computeConnectionStats,
+  buildProviderCardComparator,
+  moveCardInOrder,
+  saveProviderCardOrder,
+} from "@/shared/utils/providerCardOrder";
 
 function ProviderCard({ provider, kind, connections }) {
   const providerInfo = AI_PROVIDERS[provider.id];
   const isNoAuth = !!providerInfo?.noAuth;
-  const providerConns = connections.filter((c) => c.provider === provider.id);
-  const connected = providerConns.filter((c) => { const s = getEffectiveStatus(c); return s === "active" || s === "success"; }).length;
-  const error = providerConns.filter((c) => { const s = getEffectiveStatus(c); return s === "error" || s === "expired" || s === "unavailable"; }).length;
-  const total = providerConns.length;
-  const allDisabled = total > 0 && providerConns.every((c) => c.isActive === false);
+  const { connected, error, total, allDisabled } = computeConnectionStats(connections, provider.id);
 
   const renderStatus = () => {
     if (isNoAuth) return <Badge variant="success" size="sm">Ready</Badge>;
@@ -107,7 +103,7 @@ function ComboList({ combos }) {
   );
 }
 
-function Section({ title, icon, kind, providers, connections, combos, onCreateCombo }) {
+function Section({ title, icon, kind, providers, connections, combos, onCreateCombo, draggingCardId, dragOverCardId, onDragStart, onDragOver, onDrop, onDragEnd }) {
   return (
     <div>
       {/* Header — title left, Create Combo right */}
@@ -135,7 +131,18 @@ function Section({ title, icon, kind, providers, connections, combos, onCreateCo
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {providers.map((p) => (
-            <ProviderCard key={p.id} provider={p} kind={kind} connections={connections} />
+            <DraggableCard
+              key={p.id}
+              cardId={p.id}
+              isDragging={draggingCardId === p.id}
+              isOver={dragOverCardId === p.id && draggingCardId !== p.id}
+              onDragStart={onDragStart}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+              onDragEnd={onDragEnd}
+            >
+              <ProviderCard provider={p} kind={kind} connections={connections} />
+            </DraggableCard>
           ))}
         </div>
       )}
@@ -147,25 +154,56 @@ export default function WebProvidersPage() {
   const router = useRouter();
   const [connections, setConnections] = useState([]);
   const [combos, setCombos] = useState([]);
+  const [cardOrder, setCardOrder] = useState([]);
+  const [draggingCardId, setDraggingCardId] = useState(null);
+  const [dragOverCardId, setDragOverCardId] = useState(null);
 
   const fetchAll = async () => {
     try {
-      const [connsRes, combosRes] = await Promise.all([
+      const [connsRes, combosRes, settingsRes] = await Promise.all([
         fetch("/api/providers", { cache: "no-store" }),
         fetch("/api/combos", { cache: "no-store" }),
+        fetch("/api/settings", { cache: "no-store" }),
       ]);
       if (connsRes.ok) setConnections((await connsRes.json()).connections || []);
       if (combosRes.ok) setCombos((await combosRes.json()).combos || []);
+      if (settingsRes.ok) {
+        const s = await settingsRes.json();
+        if (Array.isArray(s.providerCardOrder)) setCardOrder(s.providerCardOrder);
+      }
     } catch { /* noop */ }
   };
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchAll(); }, []);
 
-  const searchProviders = getProvidersByKind("webSearch");
-  const fetchProviders = getProvidersByKind("webFetch");
+  // Same ordering as the main providers page: connection state → manual drag
+  // order → registry priority → name (shared/utils/providerCardOrder.js).
+  const cardComparator = buildProviderCardComparator({
+    cardOrder,
+    statsOf: (id) => computeConnectionStats(connections, id),
+    infoOf: (id) => AI_PROVIDERS[id],
+  });
+  const searchProviders = [...getProvidersByKind("webSearch")].sort((a, b) => cardComparator(a.id, b.id));
+  const fetchProviders = [...getProvidersByKind("webFetch")].sort((a, b) => cardComparator(a.id, b.id));
   const searchCombos = combos.filter((c) => c.kind === "webSearch");
   const fetchCombos = combos.filter((c) => c.kind === "webFetch");
+
+  const clearDrag = () => {
+    setDraggingCardId(null);
+    setDragOverCardId(null);
+  };
+
+  const makeDropHandler = (allKeys) => (targetId) => {
+    const sourceId = draggingCardId;
+    clearDrag();
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    setCardOrder((prev) => {
+      const next = moveCardInOrder(prev, allKeys, sourceId, targetId);
+      if (next !== prev) saveProviderCardOrder(next).catch(() => {});
+      return next;
+    });
+  };
 
   const handleCreateCombo = async (kind) => {
     // Generate unique default name
@@ -194,6 +232,12 @@ export default function WebProvidersPage() {
         title="Web Search" icon="search" kind="webSearch"
         providers={searchProviders} connections={connections} combos={searchCombos}
         onCreateCombo={() => handleCreateCombo("webSearch")}
+        draggingCardId={draggingCardId}
+        dragOverCardId={dragOverCardId}
+        onDragStart={setDraggingCardId}
+        onDragOver={setDragOverCardId}
+        onDrop={makeDropHandler(searchProviders.map((p) => p.id))}
+        onDragEnd={clearDrag}
       />
 
       {/* Divider between sections */}
@@ -203,6 +247,12 @@ export default function WebProvidersPage() {
         title="Web Fetch" icon="travel_explore" kind="webFetch"
         providers={fetchProviders} connections={connections} combos={fetchCombos}
         onCreateCombo={() => handleCreateCombo("webFetch")}
+        draggingCardId={draggingCardId}
+        dragOverCardId={dragOverCardId}
+        onDragStart={setDraggingCardId}
+        onDragOver={setDragOverCardId}
+        onDrop={makeDropHandler(fetchProviders.map((p) => p.id))}
+        onDragEnd={clearDrag}
       />
     </div>
   );

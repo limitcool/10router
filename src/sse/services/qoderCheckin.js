@@ -58,6 +58,23 @@ function dayKey(nowMs = Date.now()) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// Human label for log lines — "Qoder CN: ShiYanG Yu", never a bare UUID.
+// Falls back to an 8-char id prefix only when the account has no name/email.
+function accountLabel(conn) {
+  const provider = conn.provider === "qoder-cn" ? "Qoder CN" : "Qoder";
+  const name = conn.name || conn.displayName || conn.email || `${String(conn.id || "?").slice(0, 8)}…`;
+  return `${provider}: ${name}`;
+}
+
+// 7595000 -> "2h06m", 45000 -> "45s" — durations read at a glance.
+function fmtDuration(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.round(total / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
+}
+
 async function persistDoneMap() {
   if (!doneMap) return;
   const today = dayKey();
@@ -71,9 +88,7 @@ async function persistDoneMap() {
     for (const k of Object.keys(doneMap)) delete doneMap[k];
     Object.assign(doneMap, pruned);
   } catch (err) {
-    log.warn("QODER_CHECKIN", "Persist daily-done map failed", {
-      error: err?.message ?? String(err),
-    });
+    log.warn("QODER_CHECKIN", `Persist daily-done map failed: ${err?.message ?? String(err)}`);
   }
 }
 
@@ -179,13 +194,34 @@ export async function checkinOneQoder(conn, deps = {}) {
     );
 
     if (claimable.length === 0) {
-      const alreadyCount = campaigns.filter((c) => c.claimStatus === "CLAIMED").length;
+      // Two different truths used to collapse into one result, and the dashboard
+      // rendered both as "today's credits are already claimed":
+      //
+      //   - the account has no CLAIM_BENEFIT campaign at all. The intl qoder.sh
+      //     deployment currently returns only the season promo, whose actionType
+      //     is VIEW_DETAILS, for every account we have seen — so there is nothing
+      //     to claim, and never was today;
+      //   - a credits campaign exists and is already CLAIMED.
+      //
+      // The first is a normal "nothing on offer here" state, not a claim that
+      // happened, so it gets its own status instead of borrowing the success one.
+      const creditCampaigns = campaigns.filter((c) => c.actionType === "CLAIM_BENEFIT");
+      if (creditCampaigns.length === 0) {
+        return {
+          connectionId: conn.id,
+          account: conn.name || conn.email || conn.id,
+          provider: conn.provider,
+          status: "no-activity",
+          message: "当前无可领取的活动",
+          claimedAmount: 0,
+        };
+      }
       return {
         connectionId: conn.id,
         account: conn.name || conn.email || conn.id,
         provider: conn.provider,
         status: "already",
-        message: alreadyCount > 0 ? "今日已领或无待领活动" : "当前无活动权益",
+        message: "今日已领或无待领活动",
         claimedAmount: 0,
       };
     }
@@ -255,16 +291,17 @@ export async function runQoderCheckinTick(deps = {}) {
   const { getProviderConnections } = await import("../../lib/localDb.js");
   const conns = await getProviderConnections();
 
-  const eligible = conns.filter(isEligibleQoderConnection);
+  // deps.provider scopes the pass to ONE provider (manual per-provider claim
+  // buttons); the scheduler leaves it unset and sweeps both in one pass.
+  const eligible = conns.filter(
+    (c) => isEligibleQoderConnection(c) && (!deps.provider || c.provider === deps.provider)
+  );
   if (eligible.length === 0) {
     log.debug("QODER_CHECKIN", "Tick: no eligible Qoder connections");
     return [];
   }
 
-  log.info("QODER_CHECKIN", "Daily credit-claim pass started", {
-    eligible: eligible.length,
-    ids: eligible.map((c) => c.id).filter(Boolean),
-  });
+  log.debug("QODER_CHECKIN", `领取轮次开始：${eligible.map((c) => accountLabel(c)).join("、")}`);
 
   const memo = deps.doneMap || (await getDoneMap());
   const today = dayKey(deps.nowMs);
@@ -273,9 +310,7 @@ export async function runQoderCheckinTick(deps = {}) {
   for (const conn of eligible) {
     try {
       if (deps.skipIfCheckedToday && memo[conn.id] === today) {
-        log.debug("QODER_CHECKIN", `${conn.name || conn.id}: 今日已确认完成，跳过`, {
-          id: conn.id,
-        });
+        log.debug("QODER_CHECKIN", `${accountLabel(conn)}：今日已确认完成，跳过`);
         results.push({
           connectionId: conn.id,
           account: conn.name || conn.email || conn.id,
@@ -292,22 +327,18 @@ export async function runQoderCheckinTick(deps = {}) {
 
       if (outcome.status === "checked-in") {
         memo[conn.id] = today;
-        log.info("QODER_CHECKIN", `${conn.name || conn.id}: 领取成功 (+${outcome.claimedAmount} Credits)`, {
-          id: conn.id,
-          provider: outcome.provider,
-          amount: outcome.claimedAmount,
-        });
+        log.info("QODER_CHECKIN", `${accountLabel(conn)} 领取成功 +${outcome.claimedAmount} Credits`);
       } else if (outcome.status === "already") {
         memo[conn.id] = today;
-        log.info("QODER_CHECKIN", `${conn.name || conn.id}: ${outcome.message || "今日已领或无待领活动"}`, {
-          id: conn.id,
-          provider: outcome.provider,
-        });
+        log.debug("QODER_CHECKIN", `${accountLabel(conn)}：${outcome.message || "今日已领或无待领活动"}`);
+      } else if (outcome.status === "no-activity") {
+        // Deliberately NOT memoized: nothing was confirmed, and the campaign can
+        // still appear later in the day (the daily window opens at 10:00 UTC+8),
+        // so the next tick should look again. A debug line, not a warning — for a
+        // deployment that has no such campaign this is the normal outcome.
+        log.debug("QODER_CHECKIN", `${accountLabel(conn)}：${outcome.message || "当前无可领取的活动"}`);
       } else {
-        log.warn("QODER_CHECKIN", `${conn.name || conn.id}: 领取失败 (${outcome.error || outcome.status})`, {
-          id: conn.id,
-          provider: outcome.provider,
-        });
+        log.warn("QODER_CHECKIN", `${accountLabel(conn)} 领取失败：${outcome.error || outcome.status}`);
       }
     } catch (err) {
       results.push({
@@ -317,10 +348,21 @@ export async function runQoderCheckinTick(deps = {}) {
         status: "failed",
         error: err?.message || String(err),
       });
-      log.warn("QODER_CHECKIN", `${conn.name || conn.id}: 异常 (${err?.message || err})`, {
-        id: conn.id,
-      });
+      log.warn("QODER_CHECKIN", `${accountLabel(conn)} 领取异常：${err?.message || err}`);
     }
+  }
+
+  // One consolidated summary replaces the old firehose of per-event JSON lines.
+  const claimed = results.filter((r) => r.status === "checked-in");
+  const failed = results.filter((r) => r.status === "failed");
+  const none = results.filter((r) => r.status === "no-activity");
+  const already = results.length - claimed.length - failed.length - none.length;
+  const totalCredits = claimed.reduce((a, r) => a + (r.claimedAmount || 0), 0);
+  const summary = `领取汇总：成功 ${claimed.length}（+${totalCredits} Credits）、已领 ${already}、无活动 ${none.length}、失败 ${failed.length}`;
+  if (claimed.length > 0 || failed.length > 0) {
+    log.info("QODER_CHECKIN", summary);
+  } else {
+    log.debug("QODER_CHECKIN", summary);
   }
 
   await persistDoneMap();
@@ -338,9 +380,7 @@ async function safeTick(how) {
     await runQoderCheckinTick({ skipIfCheckedToday: true, doneMap: done });
     await persistDoneMap();
   } catch (err) {
-    log.warn("QODER_CHECKIN", `Scheduled ${how} rejected (swallowed)`, {
-      error: err?.message ?? String(err),
-    });
+    log.warn("QODER_CHECKIN", `定时领取（${how}）失败：${err?.message ?? String(err)}`);
   }
 }
 
@@ -352,7 +392,7 @@ function clearTimer() {
 }
 
 function scheduleNext() {
-  if (!started) return;
+  if (!started) return 0;
   const delayMs = msUntilNextTick();
   clearTimer();
   timerHandle = setTimeout(() => {
@@ -361,9 +401,8 @@ function scheduleNext() {
   if (timerHandle && typeof timerHandle.unref === "function") {
     timerHandle.unref();
   }
-  log.info("QODER_CHECKIN", "Next all-day credit-claim tick scheduled", {
-    delaySec: Math.round(delayMs / 1000),
-  });
+  log.debug("QODER_CHECKIN", `下次领取约 ${fmtDuration(delayMs)} 后`);
+  return delayMs;
 }
 
 /**
@@ -382,9 +421,10 @@ export function startQoderCheckin(opts = {}) {
   if (opts.skipBoot !== true) {
     safeTick("boot");
   }
-  scheduleNext();
-
-  log.info("QODER_CHECKIN", "Scheduler started (all-day cadence)");
+  // One consolidated startup line (was two: "Scheduler started" + "Next tick
+  // scheduled {...}").
+  const delayMs = scheduleNext();
+  log.info("QODER_CHECKIN", `自动领取调度已启动（全天轮询）— 下次约 ${fmtDuration(delayMs)} 后`);
   return true;
 }
 

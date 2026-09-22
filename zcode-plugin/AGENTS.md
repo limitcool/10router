@@ -156,13 +156,16 @@ node scripts/export-usage.mjs --import usage.json --endpoint <URL> --key sk-…
   历史坑与 usageKey 修复）；本脚本走 `importUsageRows()` 分支——**该文档的同毫秒问题不适用
   于导入场景**，导入侧关心的是下面那条防双重计数。
 - **防双重计数**：这是最容易踩的坑。
-  - **ZCode 源：只导出官方渠道**（provider id 以 `builtin:` 开头，如 `builtin:bigmodel-*`、
-    `builtin:zai-*`）。非 `builtin:` 的 provider 一律是用户自行添加的自定义渠道，其流量
-    在用户体系里都走本地网关（10Router 自身或兄弟中继），已由 10Router 自身记账或别的
-    同步源覆盖，再导出就会重复。这是**结构性判据**（不依赖名称/URL/模型名格式），能免疫
-    provider 删除重建导致的 id 变化——历史上一版基于「配置里 baseURL 匹配」的守卫就是这么
-    漏掉旧 id 的 3810 行网关流量。逃生口：`--include-custom` 可恢复导出非官方渠道。
-    跳过时脚本会打印按 provider 分组的计数，绝不静默丢数据。
+  - **ZCode 源：只导出官方渠道**（provider id 以 `builtin:` 或 `account:` 开头，如
+    `builtin:bigmodel-*`、`builtin:zai-*`；`account:bigmodel-start-plan` 是 ZCode 大版本
+    把套餐/赠送配额渠道改出的新形态，2026-09-20 核验）。其余 provider 一律是用户自行添加的
+    自定义渠道，其流量在用户体系里都走本地网关（10Router 自身或兄弟中继），已由 10Router
+    自身记账或别的同步源覆盖，再导出就会重复。这是**结构性判据**（不依赖名称/URL/模型名
+    格式），能免疫 provider 删除重建导致的 id 变化——历史上一版基于「配置里 baseURL 匹配」
+    的守卫就是这么漏掉旧 id 的 3810 行网关流量。**教训**：ZCode 大版本会改官方渠道的 id
+    形态（builtin:→account:），漏判的表现是「某些渠道最近突然没新数据同步」——排查时先看
+    跳过计数列表里有没有形似官方渠道的新前缀。逃生口：`--include-custom` 可恢复导出非官方
+    渠道。跳过时脚本会打印按 provider 分组的计数，绝不静默丢数据。
   - mirasim 源会排除 `upstreamHost` 指向 10Router 实例的行——**必须在导出侧排除**，
     因为两侧行签名不同，服务端去重拦不住，漏掉就会双倍统计。判断逻辑见
     `isSelfHostedUpstream()`：私网/loopback 地址 + 常见端口（20127/20128/80/443），

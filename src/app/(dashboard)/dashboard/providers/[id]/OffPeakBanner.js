@@ -31,7 +31,7 @@ export default function OffPeakBanner({ promotion }) {
       className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[10px] bg-green-500/10 px-3 py-2 text-xs text-green-600 dark:text-green-400"
       title={desc || undefined}
     >
-      <span className="material-symbols-outlined text-[16px]">eco</span>
+      <span className="material-symbols-outlined" style={{ fontSize: 16 }}>eco</span>
       <span className="font-medium">{text}</span>
       {badge && <span className="opacity-80">· {badge}</span>}
       <span className="ml-auto font-mono opacity-60">

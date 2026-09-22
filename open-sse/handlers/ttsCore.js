@@ -48,23 +48,26 @@ function createTtsResponse(base64Audio, format, responseFormat) {
  *
  * @returns {Promise<{success, response, status?, error?}>}
  */
-export async function handleTtsCore({ provider, model, input, credentials, responseFormat = "mp3", language, style }) {
+export async function handleTtsCore({ provider, model, input, credentials, responseFormat = "mp3", language, style, voice }) {
   if (!input?.trim()) {
     return createErrorResult(HTTP_STATUS.BAD_REQUEST, "Missing required field: input");
   }
 
   try {
-    // Special-case adapters (google-tts, edge-tts, local-device, elevenlabs, openai, openrouter, gemini, xiaomi-mimo)
+    // Special-case adapters (google-tts, edge-tts, local-device, elevenlabs, openai, openrouter, gemini, xiaomi-mimo, xiaomi-tokenplan)
     const adapter = getTtsAdapter(provider);
     if (adapter) {
-      const result = await adapter.synthesize(input.trim(), model, credentials, responseFormat, { language, style });
+      // `provider` is passed through: multi-cluster providers (Xiaomi MiMo) route
+      // their TTS per connection — billing host vs the OAuth-returned token-plan
+      // cluster vs the tokenplan region selector.
+      const result = await adapter.synthesize(input.trim(), model, credentials, responseFormat, { language, style, voice, provider });
       // Adapter may return a full {success, response} (legacy) or {base64, format}
       if (result.success !== undefined) return result;
       return createTtsResponse(result.base64, result.format, responseFormat);
     }
 
     // Generic config-driven (hyperbolic, deepgram, nvidia, huggingface, inworld, cartesia, playht, coqui, tortoise, qwen, ...)
-    const result = await synthesizeViaConfig(provider, input.trim(), model, credentials);
+    const result = await synthesizeViaConfig(provider, input.trim(), model, credentials, { voice });
     if (result) return createTtsResponse(result.base64, result.format, responseFormat);
 
     return createErrorResult(HTTP_STATUS.BAD_REQUEST, `Provider '${provider}' does not support TTS via this route.`);

@@ -20,15 +20,43 @@ function isCertExpired(certPath) {
 }
 
 /**
- * Restrict the Root CA private key to owner-only (0600).
+ * Restrict the Root CA private key to the owning account.
  *
  * Whoever holds this key can mint a trusted certificate for any domain on this
- * machine, so it must never be world-readable. `mode` on writeFileSync only
- * applies when the file is created, so this also repairs keys written by older
- * versions. No-op on Windows, where ACLs (not POSIX bits) govern access.
+ * machine, so it must never be readable by other accounts. `mode` on
+ * writeFileSync only applies when the file is created, so this also repairs keys
+ * written by older versions.
+ *
+ * POSIX: 0600. Windows: POSIX bits do not apply — a file created under the user
+ * profile inherits ACLs that typically include Users/Authenticated Users, so the
+ * key used to sit there readable by anyone who could reach the path (issue #9,
+ * item 7). `icacls /inheritance:r` drops the inherited entries and a single
+ * explicit grant to the owning account replaces them.
+ * Best-effort in both branches: a warning, never a hard failure — MITM being
+ * broken is worse than a permissive key, and the warning tells the operator.
  */
 function hardenKeyPermissions() {
-  if (process.platform === "win32") return;
+  if (!fs.existsSync(ROOT_CA_KEY_PATH)) return;
+
+  if (process.platform === "win32") {
+    try {
+      const { execFileSync } = require("node:child_process");
+      const os = require("node:os");
+      const account =
+        [process.env.USERDOMAIN, process.env.USERNAME].filter(Boolean).join("\\") || os.userInfo().username;
+      // (F) = full control for the owner. (R,W) looks sufficient but is not: it
+      // omits DELETE, and the expired-cert regeneration path unlinks this file —
+      // hardening it that way made the owner unable to remove its own key.
+      execFileSync("icacls", [ROOT_CA_KEY_PATH, "/inheritance:r", "/grant:r", `${account}:(F)`], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch (e) {
+      console.warn(`⚠️  Could not restrict ACLs on ${ROOT_CA_KEY_PATH}: ${e.message}`);
+    }
+    return;
+  }
+
   try {
     fs.chmodSync(ROOT_CA_KEY_PATH, 0o600);
   } catch (e) {

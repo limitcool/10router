@@ -8,6 +8,21 @@ const ICON_ALIASES = {
   "b.ai": "bai",
   "b-ai": "bai",
   "siliconflow-cn": "siliconflow",
+  "stepfun-cn": "stepfun",
+  "stepfun-plan": "stepfun",
+  "stepfun-plan-cn": "stepfun",
+  "step-cn": "stepfun",
+  "stepp-cn": "stepfun",
+  "stepp": "stepfun",
+  "step": "stepfun",
+  "sfp-cn": "stepfun",
+  "sfp": "stepfun",
+  "sfpcn": "stepfun",
+  "sf-cn": "stepfun",
+  "sfcn": "stepfun",
+  "sf": "stepfun",
+  "step-plan-cn": "stepfun",
+  "step-plan": "stepfun",
 };
 
 // Providers whose asset ships as SVG (everything else is .png).

@@ -533,7 +533,7 @@ flowchart LR
 ## 安全敏感边界
 
 - JWT 密钥（`JWT_SECRET`）保护仪表盘会话 cookie 的校验/签名；占位串启动即拒，自动生成落 `$DATA_DIR/jwt-secret`（0600）
-- 初始密码兜底（`INITIAL_PASSWORD`，默认 `123456`）在真实部署中必须覆盖
+- 仪表盘密码无内置默认值：未设密码（且未配置 SSO）时仪表盘仅本机可访问 —— 远程来源没有任何可校验的凭据，无法接管实例；`INITIAL_PASSWORD` 是唯一的非交互式引导口令，无头部署必须设置
 - API key HMAC 密钥（`API_KEY_SECRET`）：默认内置兜底 + 启动告警；实验开关 `API_KEY_ROTATION=true` 切换为自动生成落盘 `$DATA_DIR/api-key-secret`（0600）——开启会使存量 key 的 CRC 全部失效，必须重新签发
 - 登录 500 只回通用文案，内部错误仅写服务端日志
 - `REQUIRE_API_KEY` 环境变量**运行时不读**——真实开关是设置 DB 的 `requireApiKey` 行（默认 `true`）

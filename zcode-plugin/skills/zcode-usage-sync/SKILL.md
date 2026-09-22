@@ -153,11 +153,13 @@ database backup section → JSON usage import).
 
 Notes:
 - The script is **idempotent**: 10Router dedups by row signature, so re-running never duplicates rows.
-- **zcode source exports OFFICIAL channels only** (`builtin:*` — bigmodel / zai / …). Non-builtin
-  providers are user-added custom providers; in this setup they all point at local gateways whose
-  traffic is already counted by 10Router itself or another sync source, so exporting them would
-  double-count. The skip is structural (immune to provider delete+re-add changing the id) and
-  prints per-provider counts. `--include-custom` restores the old behavior when needed.
+- **zcode source exports OFFICIAL channels only** (`builtin:*` — bigmodel / zai / … — plus
+  `account:*`, the subscription-plan channels a recent ZCode major release introduced; plan
+  quota traffic like `builtin:bigmodel-start-plan` now lands as `account:bigmodel-start-plan`).
+  Everything else is a user-added custom provider; in this setup they all point at local gateways
+  whose traffic is already counted by 10Router itself or another sync source, so exporting them
+  would double-count. The skip is structural (immune to provider delete+re-add changing the id)
+  and prints per-provider counts. `--include-custom` restores the old behavior when needed.
 - Each row becomes provider `zcode-<name>` in 10Router, cost 0 (subscription plans), with agent/session metadata under `meta`.
 - `--limit N` exports only the newest N rows; `--quiet` suppresses progress output.
 

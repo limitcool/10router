@@ -175,6 +175,9 @@
     "baseUrl": "https://copilot.tencent.com/v2/chat/completions",
     "forceStream": true,
     "thinkingFormat": "openai",
+    "quirks": {
+      "sanitizeToolSchema": true
+    },
     "headers": {
       "User-Agent": "CLI/2.108.1 CodeBuddy/2.108.1",
       "X-Product": "SaaS",
@@ -755,6 +758,7 @@
       "x-opencode-client": "desktop"
     },
     "noAuth": true,
+    "forceStream": true,
     "format": "openai"
   },
   "openrouter": {
@@ -871,13 +875,13 @@
     ]
   },
   "xiaomi-tokenplan": {
-    "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+    "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
     "regions": {
-      "sgp": "https://token-plan-sgp.xiaomimimo.com/v1",
       "cn": "https://token-plan-cn.xiaomimimo.com/v1",
+      "sgp": "https://token-plan-sgp.xiaomimimo.com/v1",
       "ams": "https://token-plan-ams.xiaomimimo.com/v1"
     },
-    "defaultRegion": "sgp",
+    "defaultRegion": "cn",
     "format": "openai",
     "transports": [
       {
@@ -1075,6 +1079,26 @@
     "usage": {
       "url": "https://openapi.qoder.com.cn/api/v2/quota/usage"
     },
+    "format": "openai"
+  },
+  "stepfun": {
+    "baseUrl": "https://api.stepfun.ai/v1/chat/completions",
+    "validateUrl": "https://api.stepfun.ai/v1/models",
+    "format": "openai"
+  },
+  "stepfun-cn": {
+    "baseUrl": "https://api.stepfun.com/v1/chat/completions",
+    "validateUrl": "https://api.stepfun.com/v1/models",
+    "format": "openai"
+  },
+  "stepfun-plan": {
+    "baseUrl": "https://api.stepfun.ai/step_plan/v1/chat/completions",
+    "validateUrl": "https://api.stepfun.ai/step_plan/v1/models",
+    "format": "openai"
+  },
+  "stepfun-plan-cn": {
+    "baseUrl": "https://api.stepfun.com/step_plan/v1/chat/completions",
+    "validateUrl": "https://api.stepfun.com/step_plan/v1/models",
     "format": "openai"
   }
 }

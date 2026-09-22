@@ -3,6 +3,7 @@
  */
 
 import { checkFallbackError, formatRetryAfter, withRateLimitHint } from "./accountFallback.js";
+import { gateResponse } from "./sensitiveRetry.js";
 import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
@@ -10,6 +11,25 @@ import { extractTextContent } from "../translator/formats/gemini.js";
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
 // stripped). Must be prioritized. Soft (e.g. search) only degrades a feature.
 const HARD_CAPS = new Set(["vision", "pdf", "audioInput", "videoInput"]);
+
+// Only SSE / JSON bodies can be classified by the empty-response gate (issue #10);
+// binary payloads (audio, images) must never be buffered or rewrapped.
+function isGateableContent(res) {
+  const ct = String(res?.headers?.get?.("content-type") || "").toLowerCase();
+  return ct.includes("event-stream") || ct.includes("json");
+}
+
+// Issue #10 review requirement: a replay re-bills the FULL input context (the
+// reporter's case was 1.5M tokens), so one request may only burn a bounded
+// number of models on empty answers before the gate stops engaging.
+const DEFAULT_EMPTY_RETRY_LIMIT = 2;
+
+// Combo models are "provider/model" strings; the provider prefix decides the
+// same-vendor warning (a sibling model on the same upstream very likely hits
+// the very same content filter).
+function providerPrefix(modelStr) {
+  return String(modelStr || "").split("/")[0];
+}
 
 // Prefixes used when flattening tool turns into plain prose for panel models.
 const TOOL_CALL_PREFIX = "[Called tools: ";
@@ -275,9 +295,13 @@ export function getComboModelsFromData(modelStr, combosData) {
  * @param {string} [options.comboName] - Name of the combo (for round-robin tracking)
  * @param {string} [options.comboStrategy] - Strategy: "fallback" or "round-robin"
  * @param {number|string} [options.comboStickyLimit=1] - Requests per combo model before switching
+ * @param {boolean} [options.retryOnEmpty=false] - Opt-in (issue #10): when a model answers 2xx with an
+ *   empty content-filtered stream, fall through to the next model instead of returning the blank answer
+ * @param {number} [options.retryOnEmptyLimit=2] - How many models ONE request may burn on empty answers
+ *   before the gate stops engaging (each replay re-bills the full input context)
  * @returns {Promise<Response>}
  */
-export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true }) {
+export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true, retryOnEmpty = false, retryOnEmptyLimit = DEFAULT_EMPTY_RETRY_LIMIT }) {
   // Apply rotation strategy if enabled
   let rotatedModels = getRotatedModels(models, comboName, comboStrategy, comboStickyLimit);
 
@@ -296,6 +320,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
   let lastError = null;
   let earliestRetryAfter = null;
   let lastStatus = null;
+  let emptyRetries = 0; // issue #10: bounded by retryOnEmptyLimit
 
   for (let i = 0; i < rotatedModels.length; i++) {
     const modelStr = rotatedModels[i];
@@ -306,6 +331,36 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       
       // Success (2xx) - return response
       if (result.ok) {
+        // Issue #10: some providers signal a content-safety kill with a *successful*
+        // stream that ends with zero output tokens — `result.ok` alone would hand the
+        // client a blank answer. When the combo opted in AND a fallback model remains,
+        // peek at the stream head: "terminal with no valuable content" falls through
+        // to the next model. The abandoned attempt is consumed to its terminal, so
+        // its usage still gets logged; the gate replays buffered bytes losslessly on
+        // commit. Never engages on the last model — an empty answer beats a synthetic
+        // 5xx for clients that tolerate empty completions.
+        const hasFallback = i < rotatedModels.length - 1;
+        if (retryOnEmpty && hasFallback && emptyRetries < retryOnEmptyLimit && isGateableContent(result)) {
+          const gate = await gateResponse(result);
+          if (gate.action === "retry") {
+            emptyRetries++;
+            lastError = "empty response (content filtered or zero output tokens)";
+            const nextModel = rotatedModels[i + 1];
+            const sameVendor = providerPrefix(nextModel) === providerPrefix(modelStr);
+            log.warn(
+              "COMBO",
+              `Model ${modelStr} ended with an empty filtered answer, trying next` +
+                (sameVendor ? ` (WARNING: ${nextModel} is the same provider — likely the same filter)` : "") +
+                ` [empty-retry ${emptyRetries}/${retryOnEmptyLimit}]`
+            );
+            continue;
+          }
+          log.info("COMBO", `Model ${modelStr} succeeded`);
+          return gate.response;
+        }
+        if (retryOnEmpty && hasFallback && emptyRetries >= retryOnEmptyLimit) {
+          log.warn("COMBO", `Model ${modelStr}: empty-retry budget (${retryOnEmptyLimit}) exhausted, returning response as-is`);
+        }
         log.info("COMBO", `Model ${modelStr} succeeded`);
         return result;
       }

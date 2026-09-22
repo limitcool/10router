@@ -146,3 +146,71 @@ describe("forced-SSE JSON path for a Responses-API client behind a chat upstream
     expect(json.choices[0].message.tool_calls[0].function.name).toBe("shell");
   });
 });
+
+// Issue #18 (third finding): a Claude client routed to a force-stream provider
+// (CodeBuddy CN rejects non-stream requests outright) used to receive the raw
+// aggregated chat.completion body — `content` undefined for an Anthropic client.
+describe("forced-SSE JSON path for a Claude client behind a chat upstream", () => {
+  const claudeCtx = ({ reasoning = null, stopTranslator = true } = {}) => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      'data: {"id":"chatcmpl-sse","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-v4.1-flash","choices":[{"delta":{"content":"<block>no"},"finish_reason":null}]}',
+      ...(reasoning
+        ? [`data: {"id":"chatcmpl-sse","choices":[{"delta":{"reasoning_content":${JSON.stringify(reasoning)}},"finish_reason":null}]}`]
+        : []),
+      'data: {"id":"chatcmpl-sse","choices":[{"delta":{"content":"</block>"},"finish_reason":null}]}',
+      'data: {"id":"chatcmpl-sse","choices":[{"delta":{},"finish_reason":"stop"}]}',
+      'data: {"id":"chatcmpl-sse","choices":[],"usage":{"prompt_tokens":2026,"completion_tokens":6,"total_tokens":2032}}',
+      "data: [DONE]",
+      "",
+    ].join("\n\n");
+    const ctx = {
+      providerResponse: new Response(
+        new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(chunks)); controller.close(); } }),
+        { headers: { "content-type": "text/event-stream" } }
+      ),
+      sourceFormat: FORMATS.CLAUDE,
+      targetFormat: FORMATS.OPENAI,
+      provider: "codebuddy-cn",
+      model: "deepseek-v4.1-flash",
+      body: { model: "cbcn/deepseek-v4.1-flash", messages: [], stream: false },
+      stream: false,
+      requestStartTime: Date.now(),
+      connectionId: "test-connection",
+      clientRawRequest: { endpoint: "/v1/messages" },
+      trackDone: vi.fn(),
+      appendLog: vi.fn(),
+    };
+    if (stopTranslator) {
+      // exactly what chatCore injects
+      ctx.translateToClientFormat = (raw) => translateNonStreamingResponse(raw, FORMATS.OPENAI, FORMATS.CLAUDE);
+    }
+    return ctx;
+  };
+
+  it("returns an Anthropic message body instead of raw chat.completion", async () => {
+    const result = await handleForcedSSEToJson(claudeCtx());
+    expect(result.success).toBe(true);
+    const json = await result.response.json();
+    expect(json.type).toBe("message");
+    expect(json).not.toHaveProperty("choices");
+    const text = json.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    expect(text).toBe("<block>no</block>");
+    // `usage` must be Anthropic-named: Claude Code reads usage.input_tokens.
+    expect(json.usage.input_tokens).toBe(2026);
+    expect(json.usage.output_tokens).toBe(6);
+    expect(json.stop_reason).toBe("end_turn");
+  });
+
+  it("keeps reasoning as a thinking block, like the normal non-streaming path", async () => {
+    const result = await handleForcedSSEToJson(claudeCtx({ reasoning: "weighing the request" }));
+    const json = await result.response.json();
+    expect(json.content.find((b) => b.type === "thinking")?.thinking).toBe("weighing the request");
+  });
+
+  it("falls back to the raw body when no translator is injected", async () => {
+    const result = await handleForcedSSEToJson(claudeCtx({ stopTranslator: false }));
+    const json = await result.response.json();
+    expect(json.object).toBe("chat.completion");
+  });
+});

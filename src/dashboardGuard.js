@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings, validateApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
+import { verifyDashboardAuthToken, isDashboardAuthConfigured } from "@/lib/auth/dashboardSession";
 import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
@@ -22,7 +22,6 @@ async function hasValidCliToken(request) {
 // Public API paths — no auth required (LLM API has its own key auth inside handler).
 const PUBLIC_API_PATHS = [
   "/api/health",
-  "/api/init",
   "/api/locale",
   "/api/auth/login",
   "/api/auth/logout",
@@ -32,8 +31,23 @@ const PUBLIC_API_PATHS = [
   // Pre-flight dashboard-password check for gated UI flows (same exposure
   // class as /api/auth/login; leaks nothing but ok).
   "/api/auth/verify-password",
-  "/api/version",
   "/api/settings/require-login",
+];
+
+// Reachable without a session only from THIS machine (or with one from
+// anywhere). Issue #9 item 11: /api/version and /api/init used to be public, so
+// any remote caller could fingerprint the exact build and update state without
+// authenticating. The consumers are all local — the CLI's stale-server probe and
+// doctor reach http://127.0.0.1:<port>/api/version, desktop/main.js polls it for
+// the update check — while the dashboard's Changelog modal fetches it with the
+// user's session cookie, which the normal auth branch covers.
+//
+// NOTE: /api/version/shutdown and /api/version/update match this prefix too. They
+// are listed in ALWAYS_PROTECTED, which is evaluated first, so they keep
+// requiring a token.
+const LOCAL_OR_AUTH_API_PATHS = [
+  "/api/version",
+  "/api/init",
 ];
 
 // Public top-level prefixes (LLM API endpoints with their own API key auth).
@@ -201,6 +215,13 @@ async function isAuthenticated(request) {
   if (await hasValidToken(request)) return true;
   const settings = await loadSettings();
   if (settings && settings.requireLogin === false) return true;
+  // Bootstrap state: no password hash, no INITIAL_PASSWORD, no SSO — there is no
+  // secret a remote client could ever present, so remote clients are refused
+  // (401 / login redirect) rather than handed a default. The operator on the
+  // machine itself is let in so a password can be set; without this the guard
+  // would deadlock the first-run experience (login needs a password, setting a
+  // password needs auth). See dashboardSession.isDashboardAuthConfigured.
+  if (!isDashboardAuthConfigured(settings) && isLocalRequest(request)) return true;
   return false;
 }
 
@@ -219,6 +240,23 @@ export const __test__ = {
 
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
+
+  // "Dashboard: local-only" (Settings → Experimental → Security, off by default).
+  // Refuses non-loopback traffic to the management surface — dashboard HTML,
+  // /api/* incl. providers / keys / usage. The LLM API is deliberately exempt:
+  // it authenticates with per-key credentials and serving it over the LAN is the
+  // product's main scenario, so this switch is about the admin UI and the
+  // upstream credentials behind it, not about the gateway itself. Checked before
+  // anything else so a remote caller cannot probe which routes exist.
+  if (!isPublicLlmApi(pathname)) {
+    const settings = await loadSettings();
+    if (settings?.dashboardLocalOnly === true && !isLocalRequest(request)) {
+      return NextResponse.json(
+        { error: "The dashboard is set to local-only access (Experimental → Security). Turn it off from the machine running 10Router to manage it remotely." },
+        { status: 403 },
+      );
+    }
+  }
 
   // Local-only gate for spawn-capable / host-secret routes.
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {
@@ -262,6 +300,16 @@ export async function proxy(request) {
     return NextResponse.json({ error: "API key required for remote API access" }, { status: 401 });
   }
 
+  // Version/init info: local callers (CLI, tray, same-machine dashboard) as
+  // before, plus any authenticated session — but no longer an open book to the
+  // network (issue #9, item 11).
+  if (LOCAL_OR_AUTH_API_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+    if (isLocalRequest(request) || (await hasValidCliToken(request)) || (await isAuthenticated(request))) {
+      return NextResponse.next();
+    }
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.
   if (pathname.startsWith("/api/")) {
     if (isPublicApi(pathname)) return NextResponse.next();
@@ -274,9 +322,11 @@ export async function proxy(request) {
   if (pathname.startsWith("/dashboard")) {
     let requireLogin = true;
     let tunnelDashboardAccess = true;
+    let dashboardSettings = null;
 
     try {
       const settings = await loadSettings();
+      dashboardSettings = settings;
       if (settings) {
         requireLogin = settings.requireLogin !== false;
         tunnelDashboardAccess = settings.tunnelDashboardAccess === true;
@@ -297,6 +347,16 @@ export async function proxy(request) {
 
     // If login not required, allow through
     if (!requireLogin) return NextResponse.next();
+
+    // Bootstrap state (see isAuthenticated): with nothing configured at all, a
+    // remote client has no secret to present — it gets the login page, which
+    // explains that the first password has to be set on the machine itself. The
+    // loopback operator is let straight in so they *can* set one. This HTML
+    // branch reads the cookie directly rather than going through
+    // isAuthenticated, so it needs its own copy of the rule.
+    if (!isDashboardAuthConfigured(dashboardSettings) && isLocalRequest(request)) {
+      return NextResponse.next();
+    }
 
     // Verify JWT token
     const token = request.cookies.get("auth_token")?.value;

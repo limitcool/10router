@@ -86,6 +86,9 @@ export default {
     { id: "gemini-3-flash", name: "Gemini 3 Flash", thinking: false },
     // Image generation models
     { id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash (Image)", kind: "image", imageGen: true, capabilities: ["textToImage"] },
+    { id: "gemini-3-pro-image", name: "Gemini 3 Pro (Image)", kind: "image", imageGen: true, capabilities: ["textToImage"] },
+    { id: "gemini-2.5-flash-image", name: "Gemini 2.5 Flash (Image)", kind: "image", imageGen: true, capabilities: ["textToImage"] },
+    { id: "imagen-3.0-generate-002", name: "Imagen 3", kind: "image", imageGen: true, capabilities: ["textToImage"] },
   ],
   oauth: {
     authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",

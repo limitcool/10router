@@ -64,16 +64,29 @@ start() {
     # 注意：不写 JWT_SECRET —— 留空让服务端自动生成随机密钥（0600），
     # 旧版本写入的占位值是公开字符串，会被服务端忽略并告警。
     if [ ! -f "${SRC_DIR}/.env" ]; then
-        cat > "${SRC_DIR}/.env" <<'ENVEOF'
-INITIAL_PASSWORD=123456
-ENVEOF
-        echo "created default .env in ${SRC_DIR}"
+        # 首次安装: 生成随机初始密码 —— 不再写死 123456。0.0.0.0 监听 + 公开口令 =
+        # 局域网内任何人一步拿到管理员权限和全部上游凭据 (issue #9)。密码只打印这一次，
+        # 登录后请在 Web UI「设置」页改掉。
+        GEN_PW="$("${NODE_BIN}" -e 'process.stdout.write(require("crypto").randomBytes(12).toString("base64url"))' 2>/dev/null || true)"
+        if [ -z "${GEN_PW}" ]; then
+            GEN_PW="$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+        fi
+        printf 'INITIAL_PASSWORD=%s\n' "${GEN_PW}" > "${SRC_DIR}/.env"
+        INITIAL_PASSWORD="${GEN_PW}"
+        echo "created .env in ${SRC_DIR} (generated INITIAL_PASSWORD)"
+        echo "======================================================================"
+        echo " dashboard password for the first login: ${GEN_PW}"
+        echo " shown once — change it in the Web UI after logging in."
+        echo "======================================================================"
+        printf '%s generated INITIAL_PASSWORD in %s/.env\n' "$(date '+%F %T')" "${SRC_DIR}" >> "${LOG}"
     fi
     cd "${SRC_DIR}"
-    # 初始密码: 数据库未设密码或 requireLogin=false 时, 用 INITIAL_PASSWORD 兜底,
-    # 避免远程访问用默认密码被 "Default password must be changed before remote access" 拦截。
-    # 首次登录后建议在 Web UI 修改为自定义密码。
-    INITIAL_PASSWORD="${INITIAL_PASSWORD:-123456}"
+    # 环境变量优先级高于 .env：这里必须把 .env 里的值读出来，否则会把写好的随机密码又
+    # 覆盖成兜底常量。读不到就留空 —— 服务端在「未设密码」时会退回仅本机可访问，
+    # 而不是放行一个公开口令。
+    if [ -z "${INITIAL_PASSWORD:-}" ] && [ -f "${SRC_DIR}/.env" ]; then
+        INITIAL_PASSWORD="$(sed -n 's/^INITIAL_PASSWORD=//p' "${SRC_DIR}/.env" | head -1)"
+    fi
     # HOME 指向数据目录：fnOS app 用户（如 10router）的 /home/<app> 未必存在，
     # 而 9router 源码会 mkdirSync($HOME/.9router) 存 usage/log，指向不存在的目录会 EACCES
     # INSTALL_CHANNEL=fpk：仪表盘「检查更新」据此显示对应版本 Releases

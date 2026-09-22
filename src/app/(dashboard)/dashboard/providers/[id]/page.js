@@ -64,7 +64,7 @@ export default function ProviderDetailPage() {
   const params = useParams();
   const router = useRouter();
   const providerId = params.id;
-  const { getCaps } = useModelCaps();
+  const { getCaps, getBaseCaps, overrides, refresh } = useModelCaps();
   const notify = useNotificationStore();
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -83,7 +83,7 @@ export default function ProviderDetailPage() {
   const [selectedConnection, setSelectedConnection] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
   const [customModels, setCustomModels] = useState([]);
-  const [codeBuddyOAuthImportEnabled, setCodeBuddyOAuthImportEnabled] = useState(false); // experimental toggle
+  const [oauthTransferEnabled, setOauthTransferEnabled] = useState(false); // per-provider toggle (falls back to legacy global)
   const [codeBuddyCheckinEnabled, setCodeBuddyCheckinEnabled] = useState(false); // experimental auto daily check-in toggle
   // cbcn check-in manual trigger: running flag (per-account results go to the
   // summary toast + [CB_CN_CHECKIN] server log, not an inline list).
@@ -283,6 +283,10 @@ export default function ProviderDetailPage() {
       }
       const checkedInList = list.filter((r) => r.status === "checked-in");
       const alreadyList = list.filter((r) => r.status === "already");
+      // Accounts the deployment offers no claim campaign for at all (intl Qoder
+      // currently returns only a "view details" promo). These are NOT failures
+      // and NOT an "already claimed" — saying either read as a lie.
+      const noneList = list.filter((r) => r.status === "no-activity");
       const failedList = list.filter((r) => r.status === "failed");
 
       const totalCredits = checkedInList.reduce((acc, cur) => acc + (cur.claimedAmount || 0), 0);
@@ -291,12 +295,18 @@ export default function ProviderDetailPage() {
         notify.success(
           `${translate("Claim successful")}: +${totalCredits} Credits (${checkedInList.length} ${translate("accounts")})`
         );
-      } else if (failedList.length === 0) {
-        notify.info(translate("Daily credits already claimed for today"));
-      } else {
+      } else if (failedList.length > 0) {
         notify.error(
           `${translate("Claim failed")}: ${failedList.map(f => f.error).join(", ")}`
         );
+      } else if (noneList.length > 0) {
+        // Friendly, informational: nothing is broken and there is nothing to do.
+        const suffix = alreadyList.length > 0
+          ? ` / ${translate("Daily credits already claimed for today")} (${alreadyList.length} ${translate("accounts")})`
+          : ` (${noneList.length} ${translate("accounts")})`;
+        notify.info(translate("No claimable activity available for this account") + suffix);
+      } else {
+        notify.info(translate("Daily credits already claimed for today"));
       }
     } catch (e) {
       notify.error(translate("Claim failed") + ": " + e.message);
@@ -350,7 +360,7 @@ export default function ProviderDetailPage() {
   // Generic OAuth transfer: every provider whose registry declares an oauth
   // auth mode (not just codebuddy). When CN check-in is on it hides the
   // buttons in favor of the check-in block — surface a reminder then.
-  const oauthTransferOn = isOAuth && providerInfo?.authModes?.includes("oauth") && codeBuddyOAuthImportEnabled;
+  const oauthTransferOn = isOAuth && providerInfo?.authModes?.includes("oauth") && oauthTransferEnabled;
   // Experimental auto daily check-in — mutually exclusive display vs import/export.
   const codeBuddyCheckinOn = isCodeBuddy && codeBuddyCheckinEnabled;
   const staticModels = getModelsByProviderId(providerId);
@@ -554,6 +564,7 @@ export default function ProviderDetailPage() {
       setProviderStrategy(override.fallbackStrategy || null);
       setProviderStickyLimit(override.stickyRoundRobinLimit != null ? String(override.stickyRoundRobinLimit) : "1");
       setEarliestExpiryFirst(override.earliestExpiryFirst === true);
+      setOauthTransferEnabled(settingsData.codeBuddyOAuthImport === true);
       // Load per-provider thinking config
       const thinkingCfg = (settingsData.providerThinking || {})[providerId] || {};
       setThinkingMode(thinkingCfg.mode || "auto");
@@ -614,7 +625,11 @@ export default function ProviderDetailPage() {
     }
   };
 
-  const saveProviderStrategy = async (strategy, stickyLimit, earliestExpiry = earliestExpiryFirst) => {
+  const saveProviderStrategy = async (
+    strategy,
+    stickyLimit,
+    earliestExpiry = earliestExpiryFirst,
+  ) => {
     try {
       const settingsRes = await fetch("/api/settings", { cache: "no-store" });
       const settingsData = settingsRes.ok ? await settingsRes.json() : {};
@@ -729,9 +744,7 @@ export default function ProviderDetailPage() {
     fetch("/api/settings", { cache: "no-store" })
       .then((res) => res.json())
       .then((data) => {
-        if (typeof data.codeBuddyOAuthImport === "boolean") {
-          setCodeBuddyOAuthImportEnabled(data.codeBuddyOAuthImport);
-        }
+        setOauthTransferEnabled(data.codeBuddyOAuthImport === true);
         if (typeof data.codeBuddyCheckin === "boolean") {
           setCodeBuddyCheckinEnabled(data.codeBuddyCheckin);
         }
@@ -833,6 +846,30 @@ export default function ProviderDetailPage() {
       }
     } catch (error) {
       console.log("Error adding custom model:", error);
+    }
+  };
+
+  // Per-model context-window / max-output pins (kept out of the catalog, in
+  // the modelCaps scope). The hook already folds overrides into getCaps, so
+  // badges update as soon as refresh() re-reads /api/models/caps.
+  const isCapsPinned = (modelId) =>
+    !!(overrides?.[providerStorageAlias]?.[modelId] || overrides?.[providerId]?.[modelId]);
+  const handleSaveModelCaps = async (modelId, caps) => {
+    try {
+      const res = await fetch("/api/models/caps", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: providerStorageAlias || providerId, modelId, ...(caps || {}) }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        notify.error(d?.error || "Failed to save model settings");
+        return;
+      }
+      refresh();
+    } catch (error) {
+      console.log("Error saving model caps:", error);
+      notify.error("Failed to save model settings");
     }
   };
 
@@ -1574,6 +1611,9 @@ export default function ProviderDetailPage() {
             isCustom
             isFree={false}
             caps={getCaps(`${providerId}/${model.id}`)}
+            baseCaps={getBaseCaps(`${providerId}/${model.id}`)}
+            onSaveCaps={(caps) => handleSaveModelCaps(model.id, caps)}
+            capsPinned={isCapsPinned(model.id)}
             thinkingSuffix={resolveThinkingSuffix(model.id)}
           />
         ))}
@@ -1600,6 +1640,9 @@ export default function ProviderDetailPage() {
               isFree={model.isFree}
               onDisable={() => handleDisableModel(model.id)}
               caps={getCaps(`${providerId}/${model.id}`)}
+              baseCaps={getBaseCaps(`${providerId}/${model.id}`)}
+              onSaveCaps={(caps) => handleSaveModelCaps(model.id, caps)}
+              capsPinned={isCapsPinned(model.id)}
               thinkingSuffix={resolveThinkingSuffix(model.id)}
             />
           );
@@ -1711,6 +1754,10 @@ export default function ProviderDetailPage() {
                   onEnable={() => handleToggleCustomModel(model.id, true)}
                   isCustom={false}
                   isFree={false}
+                  caps={getCaps(`${providerId}/${model.id}`)}
+                  baseCaps={getBaseCaps(`${providerId}/${model.id}`)}
+                  onSaveCaps={(caps) => handleSaveModelCaps(model.id, caps)}
+                  capsPinned={isCapsPinned(model.id)}
                 />
               ))}
               {disabledDisplayModels.map((model) => (
@@ -1726,6 +1773,9 @@ export default function ProviderDetailPage() {
                   onEnable={() => handleEnableModel(model.id)}
                   isFree={model.isFree}
                   caps={getCaps(`${providerId}/${model.id}`)}
+                  baseCaps={getBaseCaps(`${providerId}/${model.id}`)}
+                  onSaveCaps={(caps) => handleSaveModelCaps(model.id, caps)}
+                  capsPinned={isCapsPinned(model.id)}
                   thinkingSuffix={resolveThinkingSuffix(model.id)}
                 />
               ))}
@@ -1999,7 +2049,7 @@ export default function ProviderDetailPage() {
                       value={providerStickyLimit}
                       onChange={(e) => handleStickyLimitChange(e.target.value)}
                       placeholder="1"
-                      className="w-14 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
+                      className="w-14 px-2 py-1 text-xs border border-border rounded-md bg-surface focus:outline-none focus:border-primary"
                     />
                   </div>
                 )}
@@ -2198,7 +2248,7 @@ export default function ProviderDetailPage() {
                 value={thinkingMode}
                 onChange={(e) => handleThinkingModeChange(e.target.value)}
                 title="Appends (level) suffix to copied model names"
-                className="rounded-md border border-border bg-background px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                className="rounded-md border border-border bg-surface px-2 py-1 text-xs focus:border-primary focus:outline-none"
               >
                 {providerThinkingLevels.map((opt) => (
                   <option key={opt} value={opt}>{`Thinking: ${opt.charAt(0).toUpperCase() + opt.slice(1)}`}</option>
@@ -2369,8 +2419,8 @@ export default function ProviderDetailPage() {
           isOpen={showAddCustomModel}
           providerAlias={providerStorageAlias}
           providerDisplayAlias={providerDisplayAlias}
-          onSave={async (modelId) => {
-            await handleAddCustomModel(modelId, "llm", providerStorageAlias);
+          onSave={async (modelId, caps) => {
+            await handleAddCustomModel(modelId, "llm", providerStorageAlias, caps || {});
             setShowAddCustomModel(false);
           }}
           onClose={() => setShowAddCustomModel(false)}

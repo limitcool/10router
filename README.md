@@ -48,7 +48,7 @@
 
 | 版本 | 核心要点 |
 |------|----------|
-| **v1.1.3** | Qoder 国内版完整恢复；Qoder 每日 Credits 自动领取（实验开关）；资源包逐包展示与到期；配额文案对齐官网；CodeBuddy intl DeepSeek reasoning_effort 修复（#23） |
+| **v1.1.3** | Qoder 国内版完整恢复与每日 Credits 自动领取；按模型钉住上下文窗口/最大输出；超长上下文服务端自动压缩；Provider 卡片拖拽排序且模型列表同步；严格端点工具 schema 降级（#27）；额度重置徽章持久显示 |
 | **v1.1.2** | 用量仪表盘（热力图 / 节点健康度 / 生涯统计）；CodeBuddy 11128 渠道级熔断；Cline/ClinePass 凭据自动刷新修复；小米 Token Plan 出口节点匹配 |
 | **v1.1.1** | 跨账号「配额包到期优先」调度；Command Code 配额追踪；全供应商 OAuth 加密导出/导入；用量国际化与官方图标补齐 |
 | **v1.1.0** | 小米 MiMo 桌面版（Desktop 专属模型与会话）；opencode-go 供应商；Codex 图片工具化；Windows 数据目录迁移 |
@@ -94,6 +94,12 @@ docker run -d \
 
 支持 `linux/amd64` 和 `linux/arm64`。
 
+> 💡 **自托管内网 / 容器互联（Issue #25）**：
+> 若在 Docker 内部网络需要连接同网络下的其他容器或私网端点（如 `http://cli-proxy-api-plus:8317/v1`），默认会被 SSRF 防护拦截。可通过注入环境变量按需放行：
+> - `ALLOW_PRIVATE_HOSTS=1`：总开关，放行全部内网私有地址。
+> - `PRIVATE_HOST_ALLOWLIST=cli-proxy-api-plus,host.docker.internal`：精细主机白名单（精确匹配）。
+> ⚠️ *注意：仅建议在受信任的内网/自托管环境中使用，请勿将开启此开关的实例直接无保护暴露在公网。*
+
 ### 📦 fnOS fpk 安装
 
 从 [Releases](https://github.com/techysy/10router/releases) 下载对应架构的 `.fpk` 文件：
@@ -134,7 +140,12 @@ PORT=20128 HOSTNAME=0.0.0.0 npm run start
 
 - Dashboard: `http://localhost:20128/dashboard`
 - API endpoint: `http://localhost:20128/v1`
-- 初始密码: `123456`（登录后请修改）
+- 初始密码: **无内置默认值**。首次启动未设密码（且未配置 SSO）时，仪表盘仅本机可访问 —— 请在同一台机器上打开仪表盘，在侧边栏「设置」页设置密码；无头部署（Docker / fnOS）用 `INITIAL_PASSWORD` 指定初始口令，登录后请在「设置」页修改
+
+### ⚙️ 数据目录与驱动诊断
+
+- **`DATA_DIR`** 指定数据目录（默认 Windows `%APPDATA%\10router`，其余平台 `~/.10router`）：数据库、日志与运行时依赖（如 better-sqlite3 副本）都在这里。
+- **`GET /api/health`** 额外返回 `driver`（当前生效的 SQLite 驱动）与 `lastDriverError`（某个后备驱动被跳过的原因，例如全局 node_modules 里存在损坏的 better-sqlite3 副本）。两者只读取已初始化的状态，**不会**为此触发数据库初始化。
 
 ## 🔌 用量同步插件（10router-sync）
 
@@ -227,9 +238,26 @@ git show upstream/master:<path>    # 阅读某文件的上游实现
 
 ## 👥 贡献者
 
-- [techysy](https://github.com/techysy) — 主要维护者
-- [shiyangyuda](https://github.com/shiyangyuda) — 代码优化
-- [monkey2jack](https://github.com/monkey2jack) — arm64 Docker 支持
+<!-- 头像列表：主要维护者在前，其余按「PR + issue 数」降序。名单由 issue / PR 的创建者汇总而来，
+     改动时请一并更新（头像取自 GitHub 公开头像，链接即个人主页）。 -->
+<p>
+  <a href="https://github.com/techysy" title="techysy — 主要维护者"><img src="https://github.com/techysy.png?size=80" width="48" height="48" alt="techysy" /></a>
+  <a href="https://github.com/shiyangyuda" title="shiyangyuda — 代码优化"><img src="https://github.com/shiyangyuda.png?size=80" width="48" height="48" alt="shiyangyuda" /></a>
+  <a href="https://github.com/monkey2jack" title="monkey2jack — arm64 Docker 支持（PR #1 #8 #20 #22）"><img src="https://github.com/monkey2jack.png?size=80" width="48" height="48" alt="monkey2jack" /></a>
+  <a href="https://github.com/IOPQWE51" title="IOPQWE51 — PR #5 #23"><img src="https://github.com/IOPQWE51.png?size=80" width="48" height="48" alt="IOPQWE51" /></a>
+  <a href="https://github.com/lan5635" title="lan5635 — issue 反馈"><img src="https://github.com/lan5635.png?size=80" width="48" height="48" alt="lan5635" /></a>
+  <a href="https://github.com/RyuuzakiLu2023" title="RyuuzakiLu2023 — issue 反馈（安全审计）"><img src="https://github.com/RyuuzakiLu2023.png?size=80" width="48" height="48" alt="RyuuzakiLu2023" /></a>
+  <a href="https://github.com/alchohol" title="alchohol — issue 反馈"><img src="https://github.com/alchohol.png?size=80" width="48" height="48" alt="alchohol" /></a>
+  <a href="https://github.com/iMissNan" title="iMissNan — issue 反馈"><img src="https://github.com/iMissNan.png?size=80" width="48" height="48" alt="iMissNan" /></a>
+  <a href="https://github.com/JasonXX89" title="JasonXX89 — issue 反馈"><img src="https://github.com/JasonXX89.png?size=80" width="48" height="48" alt="JasonXX89" /></a>
+  <a href="https://github.com/nansheng365" title="nansheng365 — issue 反馈"><img src="https://github.com/nansheng365.png?size=80" width="48" height="48" alt="nansheng365" /></a>
+  <a href="https://github.com/TIANXT97" title="TIANXT97 — issue 反馈"><img src="https://github.com/TIANXT97.png?size=80" width="48" height="48" alt="TIANXT97" /></a>
+  <a href="https://github.com/weltyang1216" title="weltyang1216 — issue 反馈"><img src="https://github.com/weltyang1216.png?size=80" width="48" height="48" alt="weltyang1216" /></a>
+  <a href="https://github.com/anupamme" title="anupamme — PR #28"><img src="https://github.com/anupamme.png?size=80" width="48" height="48" alt="anupamme" /></a>
+  <a href="https://github.com/yet791080885-jpg" title="yet791080885-jpg — PR #11"><img src="https://github.com/yet791080885-jpg.png?size=80" width="48" height="48" alt="yet791080885-jpg" /></a>
+</p>
+
+<sub>名单汇总自 issue 与 PR 的创建者（含已关闭/未合入的反馈），头像与链接均指向其 GitHub 主页；若遗漏请联系维护者补上。</sub>
 
 ## 📄 License
 

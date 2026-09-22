@@ -64,8 +64,9 @@ function createSpinner(text) {
 }
 
 const pkg = require("./package.json");
-const { ensureSqliteRuntime, buildEnvWithRuntime } = require("./hooks/sqliteRuntime");
+const { ensureSqliteRuntime, buildEnvWithRuntime, getDataDir } = require("./hooks/sqliteRuntime");
 const { ensureTrayRuntime } = require("./hooks/trayRuntime");
+const { healStaleServer, writeDiskVersion, writePidFile, removePidFile } = require("./src/cli/staleServer");
 const args = process.argv.slice(2);
 
 // Subcommands (`10router xai video …`) run against an already-running gateway
@@ -73,6 +74,21 @@ const args = process.argv.slice(2);
 if (args[0] === "xai" && args[1] === "video") {
   const { run } = require("./src/cli/commands/xaiVideo");
   run(args.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(`❌ ${err?.message || err}`);
+      process.exit(1);
+    });
+  return;
+}
+
+// `10router doctor` is dispatched BEFORE the runtime self-heal below on purpose:
+// it exists to REPORT a broken runtime, so it must not silently repair one first.
+// It is read-only (no installs, no writes, no kills) and exits non-zero when any
+// check is red, which makes it usable as a CI/"is my install broken" gate.
+if (args[0] === "doctor") {
+  const { run } = require("./src/cli/doctor");
+  run(args.slice(1))
     .then((code) => process.exit(code))
     .catch((err) => {
       console.error(`❌ ${err?.message || err}`);
@@ -126,6 +142,7 @@ let noBrowser = false;
 let skipUpdate = false;
 let showLog = false;
 let trayMode = false;
+let noTray = false;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--port" || args[i] === "-p") {
@@ -143,6 +160,8 @@ for (let i = 0; i < args.length; i++) {
   } else if (args[i] === "--tray" || args[i] === "-t") {
     trayMode = true;
     process.env.TRAY_MODE = "1";
+  } else if (args[i] === "--no-tray") {
+    noTray = true;
   } else if (args[i] === "--help" || args[i] === "-h") {
     console.log(t("help.text", { bin: BIN_NAME, port: DEFAULT_PORT, host: DEFAULT_HOST }));
     process.exit(0);
@@ -157,6 +176,19 @@ if (skipUpdate && !trayMode && !process.stdin.isTTY) {
   trayMode = true;
   process.env.TRAY_MODE = "1";
 }
+
+// Record the version that is now ON DISK. An upgrade (npm i -g / fpk / desktop)
+// replaces the package dir while a detached server from the old build may still
+// be running; this marker lets that old process — and the dashboard — see that
+// the disk has moved on. postinstall.js writes it too (it runs while the old
+// server is still alive); this covers installs where postinstall never ran.
+//
+// Deliberately AFTER the `--help` / `--version` exits above: those are read-only
+// queries and must not stamp the user's data dir. Otherwise a stray run of this
+// script from a source checkout advertises the checkout's version (e.g. 1.1.4)
+// to an *installed* app that shares the same data dir, and the dashboard shows a
+// "disk differs from the running build" banner that is simply not true.
+try { writeDiskVersion(getDataDir(), pkg.version); } catch {}
 
 // Always use Node.js runtime with absolute path
 const RUNTIME = process.execPath;
@@ -527,8 +559,25 @@ if (!fs.existsSync(serverPath)) {
 
 // Start server immediately; run update check in parallel (not on the critical path).
 const updatePromise = checkForUpdate();
+
+// Stop a server left over from a PREVIOUS build before trying to own the port:
+// otherwise the new server dies on EADDRINUSE while the stale one keeps serving
+// chunk hashes that no longer exist on disk (blank dashboard). Never fatal.
+function logStaleServerResult(result) {
+  if (result && result.action === "killed") {
+    console.log(t("launcher.staleServerKilled", { running: result.running, disk: pkg.version }));
+  } else if (result && result.action === "warn") {
+    console.log(t("launcher.staleServerNoPid", { running: result.running, port: String(port) }));
+  }
+}
+
 killAllAppProcesses(port)
   .then(() => killProcessOnPort(port))
+  .then(() =>
+    healStaleServer({ port, version: pkg.version, dataDir: getDataDir() })
+      .then(logStaleServerResult)
+      .catch(() => {}),
+  )
   .then(() => startServer(updatePromise));
 
 // Show interface selection menu
@@ -610,6 +659,9 @@ function startServer(updatePromise) {
         HOSTNAME: host
       }
     });
+    // Pidfile: lets a later launcher run stop a server this process left behind
+    // (an upgrade replaces the package dir under a detached server). Best-effort.
+    if (child.pid) writePidFile(getDataDir(), child.pid);
     if (!showLog && child.stderr) {
       child.stderr.on("data", (data) => {
         const lines = data.toString().split("\n").filter(Boolean);
@@ -643,6 +695,7 @@ function startServer(updatePromise) {
       }
       // Also try to kill process group
       process.kill(-server.pid, "SIGKILL");
+      removePidFile(getDataDir());
     } catch (e) { }
   }
 
@@ -667,7 +720,13 @@ function startServer(updatePromise) {
     cleanup();
     setTimeout(() => process.exit(0), 100);
   });
+  // A closing terminal sends SIGHUP. With no TTY (nohup / systemd / a detached
+  // launcher) that signal means "the terminal went away", not "shut down", and
+  // taking the gateway down with it is the opposite of what was asked for — so
+  // ignore it, exactly as tray mode already does below.
+  const ignoreSighup = !process.stdout.isTTY;
   process.on("SIGHUP", () => {
+    if (ignoreSighup) return;
     if (isShuttingDown) return;
     isShuttingDown = true;
     cleanup();
@@ -676,6 +735,9 @@ function startServer(updatePromise) {
 
   // Initialize tray icon (runs alongside TUI)
   const initTrayIcon = () => {
+    // --no-tray: a supervisor (systemd / nohup / a container) or a user who just
+    // wants the gateway. Tray *mode* still applies; there is simply no icon.
+    if (noTray) return false;
     try {
       const { initTray } = require("./src/cli/tray/tray");
       initTray({
@@ -688,8 +750,16 @@ function startServer(updatePromise) {
         },
         onOpenDashboard: () => openBrowser(url)
       });
+      return true;
     } catch (err) {
-      // Tray not available - continue without it
+      // Tray not available (headless host, no systray backend, missing optional
+      // dependency) - keep serving, but say so rather than failing silently.
+      console.warn(
+        t("launcher.trayUnavailable", {
+          error: (err && err.message) || String(err),
+        })
+      );
+      return false;
     }
   };
 
@@ -703,9 +773,13 @@ function startServer(updatePromise) {
     console.log(t("launcher.serverLine", { url: `http://${displayHost}:${port}` }));
 
     waitServerReady(port).then(() => {
-      initTrayIcon();
-      console.log(t("launcher.trayReady"));
-      console.log(t("launcher.trayReadyHint"));
+      if (initTrayIcon()) {
+        console.log(t("launcher.trayReady"));
+        console.log(t("launcher.trayReadyHint"));
+      } else {
+        // No icon exists, so don't claim the app is sitting in the tray.
+        console.log(t("launcher.traySkipped"));
+      }
     });
 
     return;

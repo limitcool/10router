@@ -69,6 +69,19 @@ describe("modelFamilyName normalization", () => {
     expect(modelFamilyName("claude-3-sonnet")).toBe("claude");
     expect(modelFamilyName("claude-3.5-sonnet")).toBe("claude");
   });
+
+  it("folds one brand's product-line prefixes into a single family", () => {
+    // StepFun ships `step-*` (LLM/vision/image) and `stepaudio-*` (TTS/ASR).
+    // Same brand — the Model Type chart must show ONE "step" bar, not "step" +
+    // "stepaudio" side by side. Provider prefix is stripped before matching.
+    const { modelFamilyName } = usageRepo;
+    expect(modelFamilyName("step-5-preview")).toBe("step");
+    expect(modelFamilyName("step-router-v1")).toBe("step");
+    expect(modelFamilyName("step-image-edit-2")).toBe("step");
+    expect(modelFamilyName("stepaudio-3-tts")).toBe("step");
+    expect(modelFamilyName("stepaudio-2.5-asr")).toBe("step");
+    expect(modelFamilyName("stepp-cn/stepaudio-2.5-tts")).toBe("step");
+  });
 });
 
 describe("getChartData byModel series", () => {

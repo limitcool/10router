@@ -15,7 +15,8 @@ import { getGrokCliUsage } from "./usage/grok-cli.js";
 import { getKimiUsage } from "./usage/kimi.js";
 import { getDeepseekUsage } from "./usage/deepseek.js";
 import { getOpencodeGoUsage } from "./usage/opencode-go.js";
-import { getXiaomiMimoUsage } from "./usage/xiaomi-mimo.js";
+import { getXiaomiMimoUsage, getXiaomiTokenPlanUsage } from "./usage/xiaomi-mimo.js";
+import { getStepfunUsage, STEPFUN_ACCOUNTS_HOSTS } from "./usage/stepfun.js";
 import { resolveQoderCredentials } from "./qoderModels.js";
 import {
   getIflowUsage,
@@ -64,6 +65,12 @@ const USAGE_HANDLERS = {
   deepseek: (c) => getDeepseekUsage(c.apiKey, c.proxyOptions),
   "opencode-go": (c) => getOpencodeGoUsage(c.apiKey, c.proxyOptions),
   "xiaomi-mimo": (c) => getXiaomiMimoUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
+  // Token Plan keys (tp-) live on a cluster with no quota endpoint at all — the
+  // handler exists so the row can explain that instead of falling through to
+  // "Usage API not implemented for xiaomi-tokenplan".
+  "xiaomi-tokenplan": (c) => getXiaomiTokenPlanUsage(c.apiKey, c.providerSpecificData, c.proxyOptions),
+  stepfun: (c) => getStepfunUsage(c.apiKey, c.proxyOptions, STEPFUN_ACCOUNTS_HOSTS.stepfun),
+  "stepfun-cn": (c) => getStepfunUsage(c.apiKey, c.proxyOptions, STEPFUN_ACCOUNTS_HOSTS["stepfun-cn"]),
   commandcode: (c) => getCommandCodeUsage(c.apiKey, c.proxyOptions),
 };
 

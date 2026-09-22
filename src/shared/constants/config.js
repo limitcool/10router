@@ -13,6 +13,10 @@ export const GITHUB_CONFIG = {
   donateUrl: "https://raw.githubusercontent.com/techysy/10router/refs/heads/main/donate.json",
   // Per-locale changelog markdown (public/i18n/changelog/<locale>.md) fetched
   // live from the repo, with Gitee as a fallback mirror. See ChangelogModal.
+  // NOTE: these are read from `main` by every installed client, so a release
+  // section written here reaches users before the release exists. Author it in
+  // the "Release: vX.Y.Z — 发版面校准" commit only; ChangelogModal additionally
+  // caps what it renders at the newest published version (utils/changelogCap.js).
   changelogUrlBase: "https://raw.githubusercontent.com/techysy/10router/refs/heads/main/public/i18n/changelog/",
   changelogUrlFallbackBase: "https://gitee.com/techysy/10router/raw/main/public/i18n/changelog/",
 };

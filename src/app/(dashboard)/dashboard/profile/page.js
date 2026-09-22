@@ -30,6 +30,10 @@ export default function ProfilePage() {
   const [compactUnits, setCompactUnits] = useState(true);
   const [langOpen, setLangOpen] = useState(false);
   const [shutdownOpen, setShutdownOpen] = useState(false);
+  // Turning the login check off is a one-click way to publish every provider and
+  // credential to anyone who can route to this port (issue #9, item 4), so it
+  // goes through a confirmation the way "require API key" already does.
+  const [loginOffConfirmOpen, setLoginOffConfirmOpen] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
   const [settings, setSettings] = useState({ fallbackStrategy: "fill-first" });
   const [loading, setLoading] = useState(true);
@@ -119,23 +123,6 @@ export default function ProfilePage() {
     setCompactUnits(next);
   };
 
-  const toggleProviderDisabledLastSort = async () => {
-    const next = !(settings.providerDisabledLastSort === true);
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providerDisabledLastSort: next }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
-      }
-    } catch (error) {
-      console.log("Error toggling provider disabled-last sort:", error);
-    }
-  };
-
   const toggleShowCommunityProviders = async () => {
     // Default is SHOWN; toggling hides/shows. Flip the stored flag.
     const next = settings.showCommunityProviders === false;
@@ -151,74 +138,6 @@ export default function ProfilePage() {
       }
     } catch (error) {
       console.log("Error toggling show-community-providers:", error);
-    }
-  };
-
-  const toggleCodeBuddyOAuthImport = async () => {
-    const next = !(settings.codeBuddyOAuthImport === true);
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codeBuddyOAuthImport: next }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
-      }
-    } catch (error) {
-      console.log("Error toggling codebuddy OAuth import:", error);
-    }
-  };
-
-  const toggleCodeBuddyCheckin = async () => {
-    const next = !(settings.codeBuddyCheckin === true);
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codeBuddyCheckin: next }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
-      }
-    } catch (error) {
-      console.log("Error toggling codebuddy auto check-in:", error);
-    }
-  };
-
-  const toggleCodeBuddyIntlSession = async () => {
-    const next = !(settings.codeBuddyIntlSession === true);
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codeBuddyIntlSession: next }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
-      }
-    } catch (error) {
-      console.log("Error toggling codebuddy intl daily session:", error);
-    }
-  };
-
-  const toggleQoderCheckin = async () => {
-    const next = !(settings.qoderCheckin === true);
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ qoderCheckin: next }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
-      }
-    } catch (error) {
-      console.log("Error toggling Qoder auto check-in:", error);
     }
   };
 
@@ -1065,6 +984,9 @@ export default function ProfilePage() {
                 onChange={handleUsageImportFile}
               />
             </div>
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {translate("The backup file contains provider credentials in readable form — store it like a password.")}
+            </p>
             {dbStatus.message && (
               <p className={`text-sm ${dbStatus.type === "error" ? "text-red-500" : "text-green-600 dark:text-green-400"}`}>
                 {dbStatus.message}
@@ -1127,12 +1049,20 @@ export default function ProfilePage() {
                 </p>
               </div>
               <Toggle
-                checked={settings.requireLogin === true}
-                onChange={() => updateRequireLogin(!settings.requireLogin)}
+                checked={settings.requireLogin !== false}
+                onChange={() => {
+                  if (settings.requireLogin === false) updateRequireLogin(true);
+                  else setLoginOffConfirmOpen(true);
+                }}
                 disabled={loading}
               />
             </div>
-            {settings.requireLogin === true && (
+            {/* Default is ON — the server only treats an explicit `false` as off
+                (`requireLogin !== false` everywhere in the guard). Testing
+                `=== true` here hid the form on every install that never touched
+                this setting, i.e. exactly the installations that still need to
+                set a first password. */}
+            {settings.requireLogin !== false && (
               <form onSubmit={handlePasswordChange} className="flex flex-col gap-4 pt-4 border-t border-border/50">
                 {settings.hasPassword && (
                   <div className="flex flex-col gap-2">
@@ -1146,13 +1076,6 @@ export default function ProfilePage() {
                     />
                   </div>
                 )}
-                {/* {!settings.hasPassword && (
-                  <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                    <p className="text-sm text-blue-600 dark:text-blue-400">
-                      Setting password for the first time. Leave current password empty or use default: <code className="bg-blue-500/20 px-1 rounded">123456</code>
-                    </p>
-                  </div>
-                )} */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
                     <label className="text-xs sm:text-sm font-medium">New Password</label>
@@ -1788,22 +1711,8 @@ export default function ProfilePage() {
             <h3 className="text-base sm:text-lg font-semibold">{translate("Providers")}</h3>
           </div>
           <div className="flex flex-col gap-4">
-            {/* Disabled providers sort last (behind no-connection providers) */}
-            <div className="flex items-start sm:items-center justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm sm:text-base">{translate("Disabled providers sort last")}</p>
-                <p className="text-xs sm:text-sm text-text-muted">
-                  Push providers with all connections disabled behind those with no connections
-                </p>
-              </div>
-              <Toggle
-                checked={settings.providerDisabledLastSort === true}
-                onChange={toggleProviderDisabledLastSort}
-              />
-            </div>
-
             {/* Show community welfare / trial providers (体验) */}
-            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
+            <div className="flex items-start sm:items-center justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm sm:text-base">{translate("Show trial providers")}</p>
                 <p className="text-xs sm:text-sm text-text-muted">
@@ -1815,79 +1724,6 @@ export default function ProfilePage() {
                 onChange={toggleShowCommunityProviders}
               />
             </div>
-          </div>
-        </Card>
-
-        {/* Experimental — developer / beta toggles (default off), gathered for easy future expansion */}
-        <Card>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="size-10 rounded-lg flex items-center justify-center bg-amber-500/10 text-amber-500 shrink-0">
-              <span className="material-symbols-outlined text-[20px]">science</span>
-            </div>
-            <h3 className="text-base sm:text-lg font-semibold">{translate("Experimental")}</h3>
-          </div>
-          <div className="flex flex-col gap-4">
-            {/* OAuth account import/export (provider detail pages, all OAuth providers) */}
-            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm sm:text-base">{translate("OAuth import / export")}</p>
-                <p className="text-xs sm:text-sm text-text-muted">
-                  {translate("Show Import / Export buttons on OAuth provider pages (encrypted transfer, experimental)")}
-                </p>
-              </div>
-              <Toggle
-                checked={settings.codeBuddyOAuthImport === true}
-                onChange={toggleCodeBuddyOAuthImport}
-              />
-            </div>
-
-
-            {/* CodeBuddy intl daily active-session probe (campaign credits) */}
-            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm sm:text-base">{translate("CodeBuddy daily active session")}</p>
-                <p className="text-xs sm:text-sm text-text-muted">
-                  {translate("Send one free-tier chat request per account daily so the activity credits are granted")}
-                </p>
-              </div>
-              <Toggle
-                checked={settings.codeBuddyIntlSession === true}
-                onChange={toggleCodeBuddyIntlSession}
-              />
-            </div>
-            {/* CodeBuddy CN auto daily check-in (mutually exclusive UI with import/export) */}
-            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm sm:text-base">{translate("CodeBuddy CN auto daily check-in")}</p>
-                <p className="text-xs sm:text-sm text-text-muted">
-                  {translate("Automatically check in accounts daily (retries all day until confirmed)")}
-                </p>
-              </div>
-              <Toggle
-                checked={settings.codeBuddyCheckin === true}
-                onChange={toggleCodeBuddyCheckin}
-              />
-            </div>
-
-            {/* Qoder auto daily credit claim */}
-            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm sm:text-base">{translate("Qoder auto daily credit claim")}</p>
-                <p className="text-xs sm:text-sm text-text-muted">
-                  {translate("Automatically claim daily campaign credits for Qoder and Qoder CN accounts")}
-                </p>
-              </div>
-              <Toggle
-                checked={settings.qoderCheckin === true}
-                onChange={toggleQoderCheckin}
-              />
-            </div>
-
-            <p className="text-xs text-text-muted italic pt-2 border-t border-border/50">
-              {translate("Import / Export moved behind the check-in button — turn off auto check-in to show them again")}
-            </p>
-
-
           </div>
         </Card>
 
@@ -2021,6 +1857,19 @@ export default function ProfilePage() {
           setLangOpen(false);
           setLocale(next);
         }}
+      />
+      <ConfirmModal
+        isOpen={loginOffConfirmOpen}
+        onClose={() => setLoginOffConfirmOpen(false)}
+        onConfirm={() => {
+          setLoginOffConfirmOpen(false);
+          updateRequireLogin(false);
+        }}
+        title={translate("Turn off the log-in check?")}
+        message={translate("Anyone who can reach this port will be able to manage every provider, key and credential without a password. The dashboard keeps a warning banner while it is off.")}
+        confirmText={translate("Turn it off")}
+        cancelText={translate("Cancel")}
+        variant="danger"
       />
       <ConfirmModal
         isOpen={shutdownOpen}

@@ -77,6 +77,42 @@ export async function getXiaomiMimoUsage(accessToken = null, providerSpecificDat
   }
 }
 
+// Message shown for a Token Plan connection with nothing readable. Kept as ONE
+// fixed English sentence on purpose: the dashboard renders quota messages
+// verbatim, and the DOM-level i18n runtime translates a text node only on an
+// exact match — so a sentence without interpolation is translatable as-is
+// (zh-CN / zh-TW entries live in public/i18n/literals).
+const TOKENPLAN_NO_QUOTA_MESSAGE =
+  "Token Plan does not expose a quota API for standalone keys — check your plan usage in the MiMo console.";
+
+/**
+ * MiMo Token Plan (tp- keys, token-plan-<region>.xiaomimimo.com).
+ *
+ * There is no plan-quota endpoint on that cluster: every candidate path on the
+ * token-plan hosts answers 404 (openresty), and the account-service endpoint
+ * that carries the weekly allowance rejects a tp- key with 401 (it wants a MiMo
+ * account session). So there are only two possible answers:
+ *
+ *   1. the connection also carries a Desktop account session (mimoPassToken) —
+ *      the weekly allowance is then readable, and we show it exactly like the
+ *      base provider does;
+ *   2. otherwise there is genuinely nothing to fetch. A raw "Usage API not
+ *      implemented for xiaomi-tokenplan" is what the row used to display; say
+ *      something true instead.
+ */
+export async function getXiaomiTokenPlanUsage(apiKey = null, providerSpecificData = null, proxyOptions = null) {
+  const account = await getMimoAccountUsage(providerSpecificData, proxyOptions);
+  if (typeof account.percent === "number" && Number.isFinite(account.percent)) {
+    return { plan: "MiMo Token Plan", quotas: { Weekly: toWeeklyQuota(account.percent, account.resetAt, account.resetDate) } };
+  }
+
+  if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+    return { message: "API key not available. Add a key to view usage." };
+  }
+
+  return { plan: "MiMo Token Plan", message: TOKENPLAN_NO_QUOTA_MESSAGE };
+}
+
 /**
  * Normalize the account-service payload into the dashboard's quota shape.
  * `percent` is the REMAINING percentage (94 means 94% left).
@@ -99,5 +135,8 @@ function toWeeklyQuota(percent, resetAt, resetDate) {
     remainingPercentage: remaining,
     resetAt: resetIso,
     unlimited: false,
+    // Weekly allowance: resetAt is the next refresh, not a final expiry —
+    // the badge must survive a drained week (that's when users look for it).
+    recurring: true,
   };
 }

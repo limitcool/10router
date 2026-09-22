@@ -134,6 +134,16 @@ export const MODEL_CAPABILITIES = {
   "mimo-v2-omni":   { vision: true, audioInput: true, videoInput: true, pdf: true, contextWindow: 262144, maxOutput: 131072 }, // xiaomi：text+image+audio+video+pdf
   "hy3":            { reasoning: true, thinkingFormat: "hunyuan", contextWindow: 256000, maxOutput: 128000 }, // tencent-tokenhub；`hy3*` 的 262144/262144（输出=窗口）无来源
   "hy3-preview":    { reasoning: true, thinkingFormat: "hunyuan", contextWindow: 256000, maxOutput: 64000 }, // tencent-tokenhub：预览版输出（64000）比正式版（128000）更小
+  // StepFun 第一方（platform.stepfun.com，2026-09 文档）：兜底模式 `*step-*` 是 128K 旧值；
+  // 这里按官方页标注修正窗口并补视觉/视频输入。maxOutput 官方未给确定值（step-5-preview
+  // 明说 max_tokens 默认不限）→ 省略，走 DEFAULT 兜底。转售行（tokenrouter/commandcode 的
+  // stepfun/step-*）经 baseModel 同键命中，取第一方与旧惯例一致。
+  "step-5-preview":     { vision: true, videoInput: true, reasoning: true, thinkingFormat: "step", contextWindow: 1000000 },
+  "step-3.7-flash":     { vision: true, videoInput: true, reasoning: true, thinkingFormat: "step", contextWindow: 256000 },
+  "step-3.5-flash":     { reasoning: true, thinkingFormat: "step", contextWindow: 256000 }, // 仅文本（官方：不支持图片输入）
+  "step-3.5-flash-2603": { reasoning: true, thinkingFormat: "step", contextWindow: 256000 },
+  "step-1o-turbo-vision": { vision: true, contextWindow: 32000 },
+  "step-router-v1":     { reasoning: true, thinkingFormat: "step", contextWindow: 256000 }, // Step Plan 专属智能路由模型；官方未标注窗口，与 step-3.x 同档（否则 `*step-*` 兜底给 128K）
   "grok-4.5":       { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 500000, maxOutput: 500000 }, // xai：输出上限等于窗口，与 `*grok-4.6*` 同值
   "grok-4.6":       { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 500000, maxOutput: 500000 }, // xai：与 `*grok-4.6*` 同值，仅补 pdf
   "gpt-5.6-luna":   { vision: true, pdf: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 1050000, maxOutput: 128000 }, // openai（第一方）；`*gpt-5*` 给的 400000 是 codex 系列的保守值

@@ -234,6 +234,62 @@ describe("handleImageGenerationCore", () => {
     expect(responseBody.data).toHaveLength(2);
   });
 
+  it("generates image with ComfyUI format", async () => {
+    global.fetch
+      // 1. object_info
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            CheckpointLoaderSimple: {
+              input: { required: { ckpt_name: [["v1-5-pruned-emaonly.safetensors"]] } },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      // 2. prompt
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ prompt_id: "test-prompt-123" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      // 3. history
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            "test-prompt-123": {
+              outputs: {
+                "9": {
+                  images: [{ filename: "test_001.png", subfolder: "", type: "output" }],
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      // 4. view
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mock-image-bytes"), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        })
+      );
+
+    const result = await handleImageGenerationCore({
+      body: { prompt: "A cute dog", size: "512x512" },
+      modelInfo: { provider: "comfyui", model: "stable-diffusion-v1-5" },
+      credentials: null,
+      log: null,
+    });
+
+    expect(result.success).toBe(true);
+    const responseBody = await result.response.json();
+    expect(responseBody.data).toHaveLength(1);
+    expect(responseBody.data[0].b64_json).toBe(Buffer.from("mock-image-bytes").toString("base64"));
+  });
+
   it("handles OpenRouter with HTTP-Referer header", async () => {
     global.fetch.mockResolvedValueOnce(
       new Response(

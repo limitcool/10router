@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Modal, Button } from "@/shared/components";
 import { translate } from "@/i18n/runtime";
+import { uuid } from "@/shared/utils/uuid";
 
 /**
  * Xiaomi MiMo Auth Modal
@@ -159,7 +160,10 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
     setError(null);
     setAuthCode("");
     try {
-      const state = crypto.randomUUID();
+      // The server refuses an authorize call without a client state, and this
+      // runs in the browser: `crypto.randomUUID` does not exist in an insecure
+      // context (plain http:// on a LAN address), so use the safe helper.
+      const state = uuid();
       const res = await fetch(`/api/oauth/xiaomi-mimo/authorize?state=${state}`);
       const data = await res.json();
       if (data.authorizeUrl) {
@@ -278,7 +282,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
           onChange={(e) => setAuthCode(e.target.value)}
           placeholder={translate("Paste the authorization code shown in the browser")}
           rows={3}
-          className="w-full px-3 py-2 text-sm font-mono border border-border rounded-lg bg-background focus:outline-none focus:border-primary resize-none"
+          className="w-full px-3 py-2 text-sm font-mono border border-border rounded-lg bg-surface focus:outline-none focus:border-primary resize-none"
         />
         <p className="text-xs text-text-muted mt-1">
           {translate("The code is a long string (100+ characters) — copy it whole, using the Copy button on the sign-in page.")}

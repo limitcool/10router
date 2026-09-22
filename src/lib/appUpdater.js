@@ -165,7 +165,14 @@ function resolveRelaunchCommand() {
 }
 
 // Spawn detached headless updater (Node process) then exit current server
-export function spawnUpdaterAndExit(packageName = UPDATER_CONFIG.npmPackageName) {
+// Spawn detached headless updater (Node process) then exit current server.
+//
+// `targetVersion` is required (issue #9, item 6): the updater installs exactly
+// that version and then verifies it landed, instead of trusting whatever `latest`
+// resolves to at install time. The package name is NOT a parameter any more — it
+// comes from the build's own config, so nothing upstream can redirect the install
+// at another package.
+export function spawnUpdaterAndExit(targetVersion) {
   const updaterPath = ensureRuntimeUpdater(resolveBundledUpdaterPath());
   const isTray = process.env.TRAY_MODE === "1";
   const relaunch = resolveRelaunchCommand();
@@ -180,7 +187,8 @@ export function spawnUpdaterAndExit(packageName = UPDATER_CONFIG.npmPackageName)
     windowsHide: true,
     env: {
       ...process.env,
-      UPDATER_PKG_NAME: packageName,
+      UPDATER_PKG_NAME: UPDATER_CONFIG.npmPackageName,
+      UPDATER_TARGET_VERSION: String(targetVersion || ""),
       UPDATER_PORT: String(UPDATER_CONFIG.statusPort),
       UPDATER_TAIL_LINES: String(UPDATER_CONFIG.statusLogTailLines),
       UPDATER_RETRIES: String(UPDATER_CONFIG.installRetries),

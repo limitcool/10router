@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   validateApiKey: vi.fn(),
   getConsistentMachineId: vi.fn(),
   verifyDashboardAuthToken: vi.fn(),
+  isDashboardAuthConfigured: vi.fn(() => true),
 }));
 
 vi.mock("next/server", () => ({
@@ -31,6 +32,9 @@ vi.mock("@/shared/utils/machineId", () => ({
 
 vi.mock("@/lib/auth/dashboardSession", () => ({
   verifyDashboardAuthToken: mocks.verifyDashboardAuthToken,
+  // Defaults to "a password is configured", which is the steady state: the
+  // bootstrap-loopback rule below only fires when nothing is configured at all.
+  isDashboardAuthConfigured: mocks.isDashboardAuthConfigured,
 }));
 
 const { proxy, __test__ } = await import("../../src/dashboardGuard.js");
@@ -334,6 +338,97 @@ describe("dashboard guard xiaomi-mimo auto-import (credential-bearing, P1)", () 
       host: "router.example.com",
       "x-9r-cli-token": "cli-token",
     }));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+});
+
+describe("dashboard guard bootstrap state (no password configured)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
+    // The state itself: getSettings has no password hash and no SSO keys.
+    mocks.getSettings.mockResolvedValue({ requireLogin: true });
+    mocks.validateApiKey.mockResolvedValue(false);
+    mocks.getConsistentMachineId.mockResolvedValue("cli-token");
+    mocks.verifyDashboardAuthToken.mockResolvedValue(false);
+    mocks.isDashboardAuthConfigured.mockReturnValue(false);
+  });
+
+  it("lets the loopback operator into the dashboard so a password can be set", async () => {
+    const response = await proxy(localRequest("/dashboard/profile", { host: "localhost:20128" }));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("lets loopback management APIs through (the bootstrap UI needs them)", async () => {
+    const response = await proxy(localRequest("/api/settings", { host: "localhost:20128" }));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("still redirects a remote client to the login page (which explains why)", async () => {
+    const response = await proxy(request("/dashboard", { host: "router.example.com" }));
+
+    expect(response.status).toBe(307);
+    expect(String(response.url)).toContain("/login");
+  });
+
+  it("still refuses remote management APIs — there is no secret to present", async () => {
+    const response = await proxy(request("/api/settings", { host: "router.example.com" }));
+
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe("Unauthorized");
+  });
+
+  it("keeps the public LLM API on its own API-key auth (unaffected by bootstrap)", async () => {
+    mocks.validateApiKey.mockResolvedValue(true);
+
+    const response = await proxy(request("/v1/chat/completions", {
+      host: "router.example.com",
+      authorization: "Bearer sk-valid",
+    }));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+});
+
+describe("dashboard guard dashboardLocalOnly switch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
+    mocks.getSettings.mockResolvedValue({ requireLogin: true, password: "$2a$hash", dashboardLocalOnly: true });
+    mocks.validateApiKey.mockResolvedValue(false);
+    mocks.getConsistentMachineId.mockResolvedValue("cli-token");
+    mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+  });
+
+  it("refuses a remote dashboard request even with a valid session cookie", async () => {
+    const response = await proxy(request("/dashboard", { host: "router.example.com" }));
+
+    expect(response.status).toBe(403);
+    expect(String(response.body.error)).toContain("local-only");
+  });
+
+  it("refuses remote management APIs", async () => {
+    const response = await proxy(request("/api/providers", { host: "router.example.com" }));
+
+    expect(response.status).toBe(403);
+  });
+
+  it("still serves the LLM API to remote callers — keys, not the dashboard switch", async () => {
+    mocks.validateApiKey.mockResolvedValue(true);
+
+    const response = await proxy(request("/v1/chat/completions", {
+      host: "router.example.com",
+      authorization: "Bearer sk-valid",
+    }));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("leaves loopback access untouched", async () => {
+    const response = await proxy(localRequest("/dashboard", { host: "localhost:20128" }));
 
     expect(response).toBe(mocks.nextResponse);
   });

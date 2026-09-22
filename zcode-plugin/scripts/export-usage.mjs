@@ -288,20 +288,29 @@ function convertMimoMessage(row, d) {
 // model_usage → usageHistory conversion
 // ---------------------------------------------------------------------------
 
-// ZCode rows are exported for OFFICIAL channels only (provider ids prefixed
-// "builtin:" — bigmodel / zai / …). Every non-builtin provider is a user-added
-// custom provider, and in this user's setup those all point at local gateways
-// (10Router itself, or a sibling relay) whose traffic is already accounted for
-// by 10Router's own logging or another sync source — importing them here would
-// double-count. This is structural (no reliance on provider names/URLs/model
-// shapes) and survives provider delete+re-add, which changes the UUID and
-// historically slipped past the old config-matching guard.
+// ZCode rows are exported for OFFICIAL channels only. Every other provider is
+// a user-added custom provider, and in this user's setup those all point at
+// local gateways (10Router itself, or a sibling relay) whose traffic is
+// already accounted for by 10Router's own logging or another sync source —
+// importing them here would double-count. This is structural (no reliance on
+// provider names/URLs/model shapes) and survives provider delete+re-add,
+// which changes the UUID and historically slipped past the old
+// config-matching guard.
 //
-// Escape hatch: --include-custom exports them anyway (for setups where custom
-// providers are genuine third-party channels not covered elsewhere).
-const OFFICIAL_PROVIDER_PREFIX = "builtin:";
+// Official prefixes:
+//   builtin:  — ZCode's built-in official channels (bigmodel / zai / …)
+//   account:  — subscription-account channels, introduced by a recent ZCode
+//               major release: plan/quota traffic that used to be
+//               builtin:bigmodel-start-plan now lands as
+//               account:bigmodel-start-plan (verified 2026-09-20: 341 rows
+//               since 09-18, subscription quota like the builtin form).
+//
+// Escape hatch: --include-custom exports the rest anyway (for setups where
+// custom providers are genuine third-party channels not covered elsewhere).
+const OFFICIAL_PROVIDER_PREFIXES = ["builtin:", "account:"];
 function isOfficialProvider(id) {
-  return String(id || "").startsWith(OFFICIAL_PROVIDER_PREFIX);
+  const s = String(id || "");
+  return OFFICIAL_PROVIDER_PREFIXES.some((p) => s.startsWith(p));
 }
 
 function statusTo10r(status) {
@@ -324,7 +333,7 @@ function convertRow(row) {
   const startedMs = row.started_at || row.completed_at || Date.now();
   return {
     timestamp: new Date(startedMs).toISOString(),
-    provider: ZCODE_PROVIDER_PREFIX + String(row.provider_id || "unknown").replace(/^builtin:/, ""),
+    provider: ZCODE_PROVIDER_PREFIX + String(row.provider_id || "unknown").replace(/^(builtin:|account:)/, ""),
     model: row.model_id || "unknown",
     connectionId: null,
     apiKey: null,

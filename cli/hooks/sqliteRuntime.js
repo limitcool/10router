@@ -41,12 +41,17 @@ function ensureRuntimeDir() {
   return dir;
 }
 
-function hasModule(name) {
-  return fs.existsSync(path.join(getRuntimeNodeModules(), name, "package.json"));
+// Both helpers take the node_modules dir explicitly so a *diagnostic* can ask
+// about a directory it was handed (doctor) while production code keeps the one
+// default that matters. They are the single source of truth for "installed" vs
+// "installed and actually usable": npm happily reports better-sqlite3 as present
+// when its compiled binary never got built.
+function hasModule(name, nodeModulesDir = getRuntimeNodeModules()) {
+  return fs.existsSync(path.join(nodeModulesDir, name, "package.json"));
 }
 
-function isBetterSqliteBinaryValid() {
-  const binary = path.join(getRuntimeNodeModules(), "better-sqlite3", "build", "Release", "better_sqlite3.node");
+function isBetterSqliteBinaryValid(nodeModulesDir = getRuntimeNodeModules()) {
+  const binary = path.join(nodeModulesDir, "better-sqlite3", "build", "Release", "better_sqlite3.node");
   if (!fs.existsSync(binary)) return false;
   try {
     const fd = fs.openSync(binary, "r");
@@ -88,11 +93,19 @@ function runNpmInstall({ cwd, pkgs, extraArgs = [], timeout = 180000 }) {
   return { ok: res.status === 0, code: res.status, stderr: res.stderr || "", stdout: res.stdout || "" };
 }
 
+// Always let npm RECORD these installs — never suppress saving. The runtime dir
+// (~/.10router/runtime) is a single npm project shared by this hook and
+// trayRuntime.js. A package present in node_modules but absent from
+// runtime/package.json is "extraneous", so the next `npm install` in this dir
+// prunes it: sqlite hook installs better-sqlite3 → tray hook installs systray2
+// and prunes better-sqlite3 → the round after prunes systray2 right back.
+// Recording each install as a real dependency makes npm keep both. (Regression
+// guard: tests/unit/runtime-hooks-install-args.test.js asserts no hook ever
+// passes the save-suppressing flag.)
 function npmInstall(pkgs, opts = {}) {
   const cwd = ensureRuntimeDir();
-  const extra = opts.optional ? ["--no-save"] : [];
   if (!opts.silent) console.log("⏳ Installing SQLite engine (first run)...");
-  const res = runNpmInstall({ cwd, pkgs, extraArgs: extra, timeout: opts.timeout || 180000 });
+  const res = runNpmInstall({ cwd, pkgs, timeout: opts.timeout || 180000 });
   if (!res.ok && !opts.silent) {
     const reason = summarizeNpmError(res.stderr);
     console.warn("⚠️  SQLite engine install failed — using fallback");
@@ -107,10 +120,10 @@ function npmInstall(pkgs, opts = {}) {
 // from nested node_modules — verify and reinstall if missing. node:sqlite is
 // built-in. This is purely a *speed optimization* — app works without
 // better-sqlite3 via fallbacks.
-function isSqlJsWasmValid() {
+function isSqlJsWasmValid(nodeModulesDir = getRuntimeNodeModules()) {
   const bundledWasm = path.join(__dirname, "..", "app", "node_modules", "sql.js", "dist", "sql-wasm.wasm");
   if (fs.existsSync(bundledWasm)) return true;
-  const runtimeWasm = path.join(getRuntimeNodeModules(), "sql.js", "dist", "sql-wasm.wasm");
+  const runtimeWasm = path.join(nodeModulesDir, "sql.js", "dist", "sql-wasm.wasm");
   return fs.existsSync(runtimeWasm);
 }
 
@@ -129,7 +142,7 @@ function ensureSqliteRuntime({ silent = false } = {}) {
     return { betterSqlite: true, sqlJs: sqlJsOk };
   }
 
-  const ok = npmInstall([`better-sqlite3@${BETTER_SQLITE3_VERSION}`], { optional: true, silent });
+  const ok = npmInstall([`better-sqlite3@${BETTER_SQLITE3_VERSION}`], { silent });
   return {
     betterSqlite: ok && hasModule("better-sqlite3") && isBetterSqliteBinaryValid(),
     sqlJs: sqlJsOk,
@@ -153,4 +166,9 @@ module.exports = {
   getRuntimeNodeModules,
   runNpmInstall,
   summarizeNpmError,
+  npmInstall,
+  getDataDir,
+  hasModule,
+  isBetterSqliteBinaryValid,
+  isSqlJsWasmValid,
 };

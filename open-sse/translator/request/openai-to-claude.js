@@ -12,6 +12,10 @@ import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 // Previously "proxy_" was used but this is a detectable fingerprint difference.
 const CLAUDE_OAUTH_TOOL_PREFIX = "";
 
+// Anthropic and OpenAI both cap stop sequences at 4; a client that sends more
+// would be rejected upstream, so trim instead of forwarding an invalid request.
+const MAX_STOP_SEQUENCES = 4;
+
 // Convert OpenAI request to Claude format
 export function openaiToClaudeRequest(model, body, stream) {
   // Tool name mapping for Claude OAuth (capitalizedName → originalName)
@@ -25,6 +29,18 @@ export function openaiToClaudeRequest(model, body, stream) {
     max_tokens: adjustMaxTokens(body, modelCeiling),
     stream: stream
   };
+
+  // Stop sequences — OpenAI `stop` is Anthropic `stop_sequences` (both cap at 4).
+  // The mirror of the claude→openai mapping: dropping them silently changes how
+  // long an answer runs, and clients that bound a turn with a stop string (Claude
+  // Code's auto-mode classifier is one) then read the tail they never asked for
+  // as a malformed answer. See the stop-sequence guard in utils/stopSequenceGuard.js.
+  if (body.stop !== undefined) {
+    const stops = (Array.isArray(body.stop) ? body.stop : [body.stop])
+      .filter((s) => typeof s === "string" && s.length > 0)
+      .slice(0, MAX_STOP_SEQUENCES);
+    if (stops.length > 0) result.stop_sequences = stops;
+  }
 
   // Temperature
   if (body.temperature !== undefined) {

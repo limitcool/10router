@@ -74,7 +74,10 @@ function ensureRuntimeDir() {
 function npmInstall(pkgs, { silent = false } = {}) {
   const cwd = ensureRuntimeDir();
   if (!silent) console.log("⏳ Installing system tray (first run)...");
-  const res = runNpmInstall({ cwd, pkgs, extraArgs: ["--no-save"], timeout: 120000 });
+  // Let npm record systray2 as a dependency — do NOT suppress saving: the
+  // runtime dir is one shared npm project, so an unrecorded package gets pruned
+  // by the sqlite hook's next install (see npmInstall in sqliteRuntime.js).
+  const res = runNpmInstall({ cwd, pkgs, timeout: 120000 });
   if (!res.ok && !silent) {
     const reason = summarizeNpmError(res.stderr);
     console.warn("⚠️  System tray install failed — tray disabled");
@@ -104,4 +107,4 @@ function ensureTrayRuntime({ silent = false } = {}) {
   return { systray: ok && hasSystray() };
 }
 
-module.exports = { ensureTrayRuntime };
+module.exports = { ensureTrayRuntime, npmInstall };

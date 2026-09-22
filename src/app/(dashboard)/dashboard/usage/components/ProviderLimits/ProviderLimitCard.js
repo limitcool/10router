@@ -76,7 +76,7 @@ export default function ProviderLimitCard({
           </div>
 
           <div>
-            <h3 className="font-semibold text-text-primary">
+            <h3 className="font-semibold text-text">
               {name || provider}
             </h3>
             {plan && (

@@ -7,6 +7,7 @@ import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
 import { getUsageForProvider } from "open-sse/services/usage.js";
 import { extractEarliestPackageExpiry } from "open-sse/services/usage/expiryExtractor.js";
+import { MODEL_LOCK_PREFIX } from "open-sse/services/accountFallback.js";
 import {
   refreshProviderCredentials,
   shouldRefreshCredentials,
@@ -867,12 +868,20 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
         if (connection.provider === "xiaomi-tokenplan") {
           const { resolveXiaomiTokenplanBaseUrl } = await import("open-sse/config/providers.js");
           testUrl = `${resolveXiaomiTokenplanBaseUrl(connection)}/models`;
+        } else {
+          // xiaomi-mimo: a Token Plan subscriber's browser sign-in stores a
+          // token-plan baseUrl — test the cluster the key actually belongs to.
+          const { normalizeMimoApiBase } = await import("open-sse/config/providers.js");
+          const stored = normalizeMimoApiBase(connection.providerSpecificData?.baseUrl);
+          if (stored) testUrl = `${stored}/models`;
         }
         const res = await fetchWithConnectionProxy(testUrl, {
           headers: { Authorization: `Bearer ${connection.apiKey}` },
         }, effectiveProxy);
-        // xiaomi-tokenplan: /models returns 403 for valid keys lacking list permission; only 401 means invalid
-        const valid = connection.provider === "xiaomi-tokenplan" ? res.status !== 401 : res.ok;
+        // Xiaomi plan clusters: /models returns 403 for valid keys lacking list
+        // permission; only 401 means invalid. (Billing keeps strict res.ok.)
+        const isPlanCluster = connection.provider === "xiaomi-tokenplan" || testUrl.includes("token-plan");
+        const valid = isPlanCluster ? res.status !== 401 : res.ok;
         return { valid, error: valid ? null : "Invalid API key" };
       }
       case "blackbox": {
@@ -923,6 +932,14 @@ case "llm7": {
         }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key", refreshed: false };
       }
+      case "stepfun":
+      case "stepfun-cn":
+      case "stepfun-plan":
+      case "stepfun-plan-cn":
+      // StepFun's four channels (Domestic/International × Pay-as-you-go/Step Plan)
+      // all expose a plain Bearer-auth GET /models — including the Step Plan
+      // `/step_plan/v1/models` path (the `/accounts` quota route is the only one
+      // that 404s there). Routed to the generic validator below.
       case "sensenova":
       case "longcat":
       case "bai":
@@ -1029,6 +1046,25 @@ case "llm7": {
 }
 
 /**
+ * Null-out every `modelLock_*` field on a connection (successful-test cleanup).
+ *
+ * Export for tests: the keys are flat and model-named (`modelLock_<model>`, plus
+ * the account-level `modelLock___all`), so they can only be found by prefix — a
+ * fixed key list would silently miss the model that is actually locked.
+ *
+ * @param {object} connection - raw connection row
+ * @returns {Record<string, null>} patch object, safe to spread into an update
+ */
+export function clearModelLockFields(connection) {
+  if (!connection) return {};
+  return Object.fromEntries(
+    Object.keys(connection)
+      .filter((key) => key.startsWith(MODEL_LOCK_PREFIX))
+      .map((key) => [key, null])
+  );
+}
+
+/**
  * Test a single connection by ID, update DB, and return result.
  */
 export async function testSingleConnection(id) {
@@ -1082,6 +1118,23 @@ export async function testSingleConnection(id) {
         : null
       : new Date().toISOString(),
   };
+
+  // A successful test is proof the credential works RIGHT NOW, so no runtime
+  // health state may outlive it. Without this, re-logging into an account whose
+  // token had gone stale still left the old locks in place: the dashboard showed
+  // a green connection while every request kept being answered with the stale
+  // lock ("no account available"), so the user's fix looked like it did nothing.
+  //
+  // Only on success — clearing health state after a FAILED test would erase the
+  // evidence the dashboard is about to show.
+  if (result.valid) {
+    Object.assign(updateData, {
+      backoffLevel: 0,
+      rateLimitedUntil: null,
+      errorCode: null,
+      ...clearModelLockFields(connection),
+    });
+  }
 
   if (result.refreshed && result.newTokens) {
     if (result.newTokens.accessToken) updateData.accessToken = result.newTokens.accessToken;

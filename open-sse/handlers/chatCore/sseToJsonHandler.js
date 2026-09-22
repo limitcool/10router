@@ -191,7 +191,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, translateToClientFormat, trackDone, appendLog, reqTag, log }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -342,8 +342,10 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     if (usage && Object.keys(usage).length > 0) parsed.usage = usage;
 
     // Keep Gemini thought summaries on the forced-SSE-to-JSON path, matching
-    // the normal non-streaming path.
-    if (!shouldPreserveReasoningContent(model, parsed, sourceFormat, targetFormat) && parsed?.choices) {
+    // the normal non-streaming path. A Claude client is left alone for the same
+    // reason: the shared translation below turns reasoning_content into a
+    // thinking block, exactly as the normal non-streaming path does.
+    if (sourceFormat !== FORMATS.CLAUDE && !shouldPreserveReasoningContent(model, parsed, sourceFormat, targetFormat) && parsed?.choices) {
       for (const choice of parsed.choices) {
         if (choice?.message?.reasoning_content && choice.message.content) {
           delete choice.message.reasoning_content;
@@ -357,9 +359,15 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     // lost on the non-streaming return path. Inlined (not imported from
     // nonStreamingHandler.js) to avoid a circular import: nonStreamingHandler
     // already imports parseSSEToOpenAIResponse from this module.
+    //
+    // Every other client dialect goes through the shared non-streaming
+    // translation, injected by chatCore. Without it a Claude client routed to a
+    // force-stream provider (CodeBuddy CN rejects non-stream requests) received
+    // the raw OpenAI body it cannot read — `content` undefined — which fails the
+    // same agent turns the stop-sequence guard exists to repair (issue #18).
     const finalBody = sourceFormat === FORMATS.OPENAI_RESPONSES
       ? chatCompletionToResponses(parsed, customToolNames)
-      : parsed;
+      : (typeof translateToClientFormat === "function" ? translateToClientFormat(parsed) : parsed);
 
     return { success: true, response: new Response(JSON.stringify(finalBody), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
   } catch (err) {

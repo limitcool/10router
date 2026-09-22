@@ -2,6 +2,24 @@
 
 User-facing highlights per release. See [CHANGELOG.md](https://github.com/techysy/10router/blob/main/CHANGELOG.md) for the full developer log.
 
+## v1.1.3 (2026-09-20)
+
+### ✨ New
+
+- **Qoder CN fully restored + daily credits auto-claim**: qoder-cn OAuth device-code / PAT auth, model catalog and usage tracking are back; daily credit auto-claim (experimental toggle + per-card manual claim) with per-pack resource-package display (individual expiry dates, first-expiry-first-spend); official Qoder icons plus live Qwen price multipliers and off-peak half-price countdown.
+- **Per-model context-window / max-output pins**: a tune icon on every model row (including auto-discovered ones) overrides `contextWindow` / `maxOutput`; leave blank to fall back to defaults. Applies to model listings and usage accounting alike.
+- **Server-side auto-compaction for oversized contexts**: when a request is estimated past 90% of the effective window (threshold selectable 80/90/95%, on by default), older turns are summarized by the same model before dispatch — clients that don't self-compress (ZCode / OpenClaw / custom agents) no longer hit "prompt is too long", with reasoning models handled too; any failure passes the original through untouched. Master toggle lives under Experimental.
+- **Drag-to-reorder provider cards** with persistence; disabled providers auto-sort to the bottom; the model API listing now follows card order.
+- **OpenCode Free anti-abuse fix, enabled by default**; Antigravity image models added (gemini-3-pro-image / imagen-3.0 etc.); 10router-sync plugin v1.5.0 (ZCode plan-channel id adaptation + sync hardening).
+
+### 🛠️ Improvements & Fixes
+
+- **CodeBuddy CN strict-gateway tool-schema compatibility**: tool parameter roots shaped as anyOf/oneOf/allOf, `$ref` or type arrays are now downgraded to a plain object root before forwarding, fixing whole-request `11129` rejections from clients like ZCode (#27).
+- **Quota reset badge no longer disappears**: recurring windows (e.g. MiMo weekly quota) keep showing "resets in N days" even when fully drained.
+- **Qoder quota parsing fix**: daily/campaign credits on free accounts no longer show 0/0.
+- **CodeBuddy intl DeepSeek reasoning_effort mapping fix** (#23).
+- **Stability backports**: 4xx request-level errors no longer trip healthy accounts; successful connection tests clear stale backoff locks; stalled silent streams report in-band error frames instead of looking like normal short replies.
+
 ## v1.1.2 (2026-09-18)
 
 ### ✨ New

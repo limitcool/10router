@@ -14,7 +14,7 @@
   "menus.settings.tunnelOff": "关闭隧道",
   "menus.settings.rtkToggle": "Token Saver (RTK): {state} → 点击切换",
   "menus.settings.headroomToggle": "Token Saver (Headroom): {state} → 点击切换",
-  "menus.settings.resetPassword": "🔑 重置密码为默认值",
+  "menus.settings.resetPassword": "🔑 重置密码",
   "menus.settings.authModeAlready": "🔓 重置认证模式(当前已是密码模式)",
   "menus.settings.authModeReset": "🔓 重置认证模式为密码(当前: {mode})",
   "menus.settings.resetAuthConfirm": "确定将认证模式重置为密码(禁用 OIDC)吗？",
@@ -29,7 +29,7 @@
   "menus.settings.tokenSaverDisabled": "Token Saver 已关闭",
   "menus.settings.headroomEnabledMsg": "Headroom 已开启",
   "menus.settings.headroomDisabledMsg": "Headroom 已关闭",
-  "menus.settings.resetPwConfirm": "确定将仪表盘密码重置为默认值「{default}」吗？",
-  "menus.settings.resetPwDone": "密码已重置,默认值: {default}",
+  "menus.settings.resetPwConfirm": "确定重置仪表盘密码吗？将生成一个新的随机密码，并在此显示一次。",
+  "menus.settings.resetPwDone": "密码已重置。新密码: {password} —— 只显示这一次，请立即保存",
   "menus.settings.resetPwFailed": "重置密码失败: {error}"
 }

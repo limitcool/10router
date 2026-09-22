@@ -151,14 +151,19 @@ function killProcess(pid, force = false, sudoPassword = null) {
   }
 }
 
+// Key for the stored MITM sudo password. Issue #9, item 7: this used to fall
+// back to `sha256(ENCRYPT_SALT)` when the machine id was unavailable — a key
+// baked into the source, so the "encrypted" password file was readable by anyone
+// with a copy of this repository. There is no safe fallback: refuse instead and
+// let the caller decline to store the password (the MITM flow then asks for it
+// interactively each time, which is worse UX but not a false sense of security).
 function deriveKey() {
-  try {
-    const { machineIdSync } = require("node-machine-id");
-    const raw = machineIdSync();
-    return crypto.createHash("sha256").update(raw + ENCRYPT_SALT).digest();
-  } catch {
-    return crypto.createHash("sha256").update(ENCRYPT_SALT).digest();
+  const { machineIdSync } = require("node-machine-id");
+  const raw = machineIdSync();
+  if (!raw || typeof raw !== "string" || !raw.trim()) {
+    throw new Error("machine id unavailable — refusing to derive a password key");
   }
+  return crypto.createHash("sha256").update(raw + ENCRYPT_SALT).digest();
 }
 
 function encryptPassword(plaintext) {

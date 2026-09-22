@@ -14,11 +14,22 @@ const srcPath = (...parts) => path.join(REPO_ROOT, ...parts);
 // ============================================================
 describe("AUDIT-002: API key masking", () => {
   it("source should contain maskApiKey function", () => {
-    const source = fs.readFileSync(
+    // The helper moved to its own module when the log stopped storing raw keys
+    // (issue #9, item 5): the identity — mask for display, digest for grouping —
+    // now lives in one place and is imported by the repo, the migration and the
+    // Security card's read-out.
+    const identity = fs.readFileSync(
+      srcPath("src/lib/db/crypto/apiKeyIdentity.js"),
+      "utf-8"
+    );
+    expect(identity).toContain("export function maskApiKey");
+
+    const usageRepo = fs.readFileSync(
       srcPath("src/lib/db/repos/usageRepo.js"),
       "utf-8"
     );
-    expect(source).toContain("function maskApiKey");
+    expect(usageRepo).toContain("maskApiKey");
+    expect(usageRepo).toMatch(/import\s*\{[^}]*maskApiKey[^}]*\}\s*from/);
   });
 
   it("getUsageHistory should use apiKeyMasked instead of apiKey", () => {

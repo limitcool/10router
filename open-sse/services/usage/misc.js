@@ -256,6 +256,73 @@ export async function getVercelAiGatewayUsage(apiKey, proxyOptions = null) {
   }
 }
 
+/**
+ * Build Qoder's per-pack breakdown from the campaigns list, reconciled against
+ * the authoritative `addOnQuota` aggregate.
+ *
+ * The device-token campaigns list is the ONLY source of per-pack data, and it is
+ * incomplete: a pack granted outside a campaign, or a campaign the listing has
+ * since dropped, is simply absent. Observed live on a real account — aggregate
+ * `total: 700` but only 500 + 100 across the listed packs, with the third gifted
+ * pack (100 credits) present on the official account page and in no device-token
+ * response. The aggregate is the source of truth, so when the listed packs cover
+ * less than `total` we account for the remainder with one expiry-less pack;
+ * otherwise the per-pack rows silently add up to less than the "Resource
+ * Package" row directly above them, which reads as missing credits.
+ *
+ * @param {{campaigns?: Array, used?: number, total?: number, now?: number}} args
+ * @returns {{packs: Array, resetAt: string|null}}
+ */
+export function buildQoderAddOnPacks({ campaigns = [], used = 0, total = 0, now = Date.now() } = {}) {
+  const claimed = campaigns.filter(
+    (c) => c?.claimStatus === "CLAIMED" && c?.benefit?.kind === "CREDITS",
+  );
+  const packs = [];
+  for (const c of claimed) {
+    const v = c.benefit?.validity;
+    let expiresAtMs = null;
+    if (v?.mode === "FIXED_END" && v.fixedEnd) {
+      expiresAtMs = new Date(v.fixedEnd).getTime();
+    } else if (v?.mode === "RELATIVE_DAYS" && v.days && c.startAt) {
+      expiresAtMs = c.startAt * 1000 + v.days * 86400000;
+    }
+    const packTotal = Number(c.benefit?.amount) || 0;
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now || packTotal <= 0) {
+      continue;
+    }
+    packs.push({ total: packTotal, expiresAt: new Date(expiresAtMs).toISOString() });
+  }
+  packs.sort((a, b) => new Date(a.expiresAt) - new Date(b.expiresAt));
+
+  // Qoder spends soonest-expiring credits first; the API only reports aggregate
+  // used, so derive per-pack used with that assumption.
+  let usedLeft = Math.max(0, Number(used) || 0);
+  for (const p of packs) {
+    const packUsed = Math.min(usedLeft, p.total);
+    p.used = packUsed;
+    p.remaining = p.total - packUsed;
+    usedLeft -= packUsed;
+  }
+
+  // Reconcile with the aggregate. Appended LAST on purpose: an unknown expiry can
+  // only be "not sooner" than every known one, so it must not pre-empt the known
+  // packs in the soonest-first spend order above.
+  const itemized = packs.reduce((sum, p) => sum + p.total, 0);
+  const unattributed = (Number(total) || 0) - itemized;
+  if (packs.length > 0 && unattributed > 0) {
+    const packUsed = Math.min(usedLeft, unattributed);
+    packs.push({
+      total: unattributed,
+      expiresAt: null,
+      used: packUsed,
+      remaining: unattributed - packUsed,
+      unitemized: true,
+    });
+  }
+
+  return { packs, resetAt: packs.length > 0 ? packs[0].expiresAt || null : null };
+}
+
 export async function getQoderUsage(accessToken, proxyOptions = null, providerId = "qoder") {
   if (!accessToken) {
     return { message: "Qoder usage unavailable: no access token" };
@@ -325,39 +392,13 @@ export async function getQoderUsage(accessToken, proxyOptions = null, providerId
       );
       if (campRes.ok) {
         const campBody = await campRes.json().catch(() => null);
-        const claimed = (campBody?.campaigns || []).filter(
-          (c) => c.claimStatus === "CLAIMED" && c.benefit?.kind === "CREDITS"
-        );
-        const now = Date.now();
-        const packs = [];
-        for (const c of claimed) {
-          const v = c.benefit?.validity;
-          let expiresAtMs = null;
-          if (v?.mode === "FIXED_END" && v.fixedEnd) {
-            expiresAtMs = new Date(v.fixedEnd).getTime();
-          } else if (v?.mode === "RELATIVE_DAYS" && v.days && c.startAt) {
-            expiresAtMs = c.startAt * 1000 + v.days * 86400000;
-          }
-          const total = Number(c.benefit?.amount) || 0;
-          if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now || total <= 0) {
-            continue;
-          }
-          packs.push({ total, expiresAt: new Date(expiresAtMs).toISOString() });
-        }
-        packs.sort((a, b) => new Date(a.expiresAt) - new Date(b.expiresAt));
-        // Qoder spends soonest-expiring credits first; the API only reports
-        // aggregate used, so derive per-pack used with that assumption.
-        let usedLeft = Number(addOnQuota.used) || 0;
-        for (const p of packs) {
-          const used = Math.min(usedLeft, p.total);
-          p.used = used;
-          p.remaining = p.total - used;
-          usedLeft -= used;
-        }
-        addOnPacks = packs;
-        if (packs.length > 0) {
-          addOnResetAt = packs[0].expiresAt;
-        }
+        const resolved = buildQoderAddOnPacks({
+          campaigns: campBody?.campaigns || [],
+          used: Number(addOnQuota.used) || 0,
+          total: Number(addOnQuota.total) || 0,
+        });
+        addOnPacks = resolved.packs;
+        addOnResetAt = resolved.resetAt;
       }
     } catch {
       // Best-effort breakdown fetch

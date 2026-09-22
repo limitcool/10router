@@ -12,6 +12,7 @@ export default {
   category: "apikey",
   transport: null,
   models: [
+    { id: "stable-diffusion-v1-5", name: "Stable Diffusion v1.5", params: ["n","size"], kind: "image" },
     { id: "flux-dev", name: "FLUX Dev", params: ["n","size"], kind: "image" },
     { id: "sdxl", name: "SDXL", params: ["n","size"], kind: "image" },
   ],

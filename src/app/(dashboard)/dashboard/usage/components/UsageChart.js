@@ -134,12 +134,12 @@ export default function UsageChart({ period = "7d" }) {
           tabs (left-aligned, free to wrap); from `sm` up it shrinks back to
           content width and hugs the right edge (`sm:w-auto sm:justify-end`). */}
       <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <div className="grid grid-cols-3 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:w-auto">
+        <div className="grid grid-cols-3 items-center gap-1 rounded-lg border border-border bg-bg-alt p-1 sm:w-auto">
           {MODES.map((m) => (
             <button
               key={m.key}
               onClick={() => setViewMode(m.key)}
-              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${viewMode === m.key ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
+              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${viewMode === m.key ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-surface-2"}`}
             >
               {m.label}
             </button>

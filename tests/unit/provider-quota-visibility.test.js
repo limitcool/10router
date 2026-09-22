@@ -195,14 +195,14 @@ describe("antigravity family grouping (multi-account)", () => {
       "gemini-3-pro": { displayName: "Gemini 3 Pro", used: 10, total: 100, remainingPercentage: 90, resetAt: null },
       "gemini-3-flash": { displayName: "Gemini 3 Flash", used: 50, total: 100, remainingPercentage: 50, resetAt: null },
       "claude-sonnet-5": { displayName: "Claude Sonnet 5", used: 80, total: 100, remainingPercentage: 20, resetAt: null },
-      "gemini-3-pro-image": { displayName: "Gemini 3 Pro Image", used: 1, total: 10, remainingPercentage: 90, resetAt: null },
+      "gemini-3-custom-image": { displayName: "Gemini 3 Custom Image", used: 1, total: 10, remainingPercentage: 90, resetAt: null },
     },
   };
 
   it("groups gemini/claude rows and keeps image models individual", () => {
     const quotas = parseQuotaData("antigravity", agyData);
     const names = quotas.map((q) => q.modelKey);
-    expect(names).toEqual(["gemini", "claude", "gemini-3-pro-image"]);
+    expect(names).toEqual(["gemini", "claude", "gemini-3-custom-image"]);
     // Group representative = most exhausted member of the family
     const gemini = quotas.find((q) => q.modelKey === "gemini");
     expect(gemini.remainingPercentage).toBe(50);
@@ -247,11 +247,11 @@ describe("antigravity family grouping (multi-account)", () => {
       connA: { hidden: ["gemini-3-pro", "gemini-3-flash"] }, // stale pre-grouping keys
     };
     const visible = filterQuotasByVisibility("connA", quotas, visibility);
-    expect(visible.map((q) => q.modelKey)).toEqual(["gemini", "claude", "gemini-3-pro-image"]);
+    expect(visible.map((q) => q.modelKey)).toEqual(["gemini", "claude", "gemini-3-custom-image"]);
     // Hiding the group hides just the group row, not the image model
     const hiddenGroup = filterQuotasByVisibility("connA", quotas, {
       connA: { hidden: ["gemini"] },
     });
-    expect(hiddenGroup.map((q) => q.modelKey)).toEqual(["claude", "gemini-3-pro-image"]);
+    expect(hiddenGroup.map((q) => q.modelKey)).toEqual(["claude", "gemini-3-custom-image"]);
   });
 });

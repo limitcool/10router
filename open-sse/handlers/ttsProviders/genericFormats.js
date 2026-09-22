@@ -154,7 +154,7 @@ async function tortoise({ baseUrl, text, voiceId }) {
 }
 
 // OpenAI-compatible upstream (qwen3-tts, etc.)
-async function openaiCompat({ baseUrl, apiKey, text, modelId, voiceId }) {
+async function openaiCompat({ baseUrl, apiKey, text, modelId, voiceId, defaultVoice }) {
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
   const res = await fetch(baseUrl, {
@@ -163,7 +163,7 @@ async function openaiCompat({ baseUrl, apiKey, text, modelId, voiceId }) {
     body: JSON.stringify({
       model: modelId,
       input: text,
-      voice: voiceId || "alloy",
+      voice: voiceId || defaultVoice || "alloy",
       response_format: "mp3",
       speed: 1.0,
     }),

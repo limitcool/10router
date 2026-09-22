@@ -185,3 +185,142 @@ export function shouldDefaultClaudeToolType(provider, finalFormat, tools, PROVID
   );
 }
 
+// ─── strict-gateway tool-schema downgrade ────────────────────────────────────
+//
+// Some upstreams validate a tool's `parameters` JSON-Schema far more strictly
+// than the OpenAI spec requires. CodeBuddy CN (`cbcn`) answers HTTP 400
+// {code:11129 "invalid function call parameters"} whenever the ROOT of a
+// tool's `parameters` is not a concrete `type:"object"`. Verified live
+// (2026-09-19) against cbcn/deepseek-v4.1-flash:
+//   rejected (11129): root anyOf / oneOf / allOf / $ref / type:["object"] /
+//                     type:[...] array / missing `type` / type:"null" / type:"string"
+//   accepted (200):   root type:"object" (even with sibling anyOf/oneOf for
+//                     conditional required), and ALL nested property-level
+//                     constructs (property anyOf/$ref/tuple/const/prefixItems/
+//                     additionalProperties-schema)
+// Only cbcn is this strict — cbai (intl), mimo, qoder all accept the bad roots
+// — so the downgrade is gated by the `sanitizeToolSchema` transport quirk and
+// never touches lenient providers. It also fixes clients like ZCode / OpenClaw
+// whose auto-generated toolsets (Pydantic / JSON-Schema) emit these shapes.
+//
+// The fix is deliberately ROOT-ONLY: nested schemas are left untouched because
+// cbcn accepts them, so a valid tool passes through byte-for-byte (idempotent).
+
+const ROOT_COMBINATORS = ["allOf", "anyOf", "oneOf"];
+
+function isSchemaObject(v) {
+  return v && typeof v === "object" && !Array.isArray(v);
+}
+
+// Resolve a local JSON-pointer ref ("#/$defs/Foo", "#/definitions/Foo") against
+// the schema root. External (http…) or unresolvable refs return null.
+function resolveLocalRef(root, ref) {
+  if (typeof ref !== "string" || !ref.startsWith("#") || ref === "#") return null;
+  const path = ref.slice(1).replace(/^\//, "");
+  if (!path) return null;
+  let node = root;
+  for (const raw of path.split("/")) {
+    const key = decodeURIComponent(raw).replace(/~1/g, "/").replace(/~0/g, "~");
+    if (isSchemaObject(node) && key in node) node = node[key];
+    else return null;
+  }
+  return isSchemaObject(node) ? node : null;
+}
+
+// Merge a root-level combinator's branches into one object schema: union of
+// properties; required = union for allOf, intersection for anyOf/oneOf.
+function mergeRootCombinator(schema, key) {
+  const { [key]: branches, ...rest } = schema;
+  if (!Array.isArray(branches)) return rest;
+  const properties = {};
+  let requiredSets = [];
+  for (const raw of branches) {
+    let b = raw;
+    if (isSchemaObject(b) && typeof b.$ref === "string") {
+      const target = resolveLocalRef(schema, b.$ref);
+      if (target) b = { ...target, ...b, $ref: undefined };
+    }
+    if (!isSchemaObject(b)) continue;
+    if (isSchemaObject(b.properties)) Object.assign(properties, b.properties);
+    if (Array.isArray(b.required)) requiredSets.push(b.required);
+  }
+  const merged = { ...rest, type: "object", properties };
+  if (requiredSets.length) {
+    const union = new Set(requiredSets.flat());
+    const keep = key === "allOf"
+      ? [...union]
+      : [...requiredSets[0]].filter((r) => requiredSets.every((s) => s.includes(r)));
+    const required = keep.filter((r) => r in properties);
+    if (required.length) merged.required = required;
+  }
+  return merged;
+}
+
+export function normalizeToolParametersSchema(params) {
+  if (!isSchemaObject(params)) return { type: "object", properties: {} };
+  let p = { ...params };
+
+  // 1) inline a root $ref (its $defs/definitions siblings travel with it)
+  if (typeof p.$ref === "string") {
+    const target = resolveLocalRef(p, p.$ref);
+    const { $ref, ...siblings } = p;
+    p = target ? { ...target, ...siblings } : { type: "object", properties: {}, ...siblings };
+  }
+
+  // 2) collapse any root combinator into a single object schema
+  for (const key of ROOT_COMBINATORS) {
+    if (Array.isArray(p[key])) p = mergeRootCombinator(p, key);
+  }
+
+  // 3) coerce a type array to one concrete type
+  if (Array.isArray(p.type)) {
+    p = { ...p, type: p.type.includes("object") ? "object" : (p.type.find((t) => t !== "null") || "object") };
+  }
+
+  // 4) root must be a concrete object with a properties map
+  if (p.type !== "object") p = { ...p, type: "object" };
+  if (!isSchemaObject(p.properties)) p = { ...p, properties: {} };
+
+  // 5) prune dangling required keys
+  if (Array.isArray(p.required)) {
+    const required = p.required.filter((r) => r in p.properties);
+    if (required.length) p = { ...p, required };
+    else { const { required: _drop, ...rest } = p; p = rest; }
+  }
+
+  return p;
+}
+
+// Downgrade the `parameters`/`input_schema` of every tool to a strict-safe root.
+// Handles OpenAI chat (function.parameters), Responses (parameters) and Claude
+// (input_schema) shapes. Returns a new array; original untouched. Fail-open.
+export function sanitizeToolSchemas(tools) {
+  if (!Array.isArray(tools)) return tools;
+  return tools.map((tool) => {
+    if (!isSchemaObject(tool)) return tool;
+    try {
+      if (isSchemaObject(tool.function) && isSchemaObject(tool.function.parameters)) {
+        return { ...tool, function: { ...tool.function, parameters: normalizeToolParametersSchema(tool.function.parameters) } };
+      }
+      if (isSchemaObject(tool.parameters)) {
+        return { ...tool, parameters: normalizeToolParametersSchema(tool.parameters) };
+      }
+      if (isSchemaObject(tool.input_schema)) {
+        return { ...tool, input_schema: normalizeToolParametersSchema(tool.input_schema) };
+      }
+    } catch {
+      /* fail-open: a schema we can't parse is dispatched unchanged */
+    }
+    return tool;
+  });
+}
+
+// Gate: only providers declaring `quirks.sanitizeToolSchema` get the downgrade.
+export function shouldSanitizeToolSchemas(provider, tools, PROVIDERS) {
+  return (
+    Array.isArray(tools)
+    && tools.length > 0
+    && PROVIDERS?.[provider]?.quirks?.sanitizeToolSchema === true
+  );
+}
+

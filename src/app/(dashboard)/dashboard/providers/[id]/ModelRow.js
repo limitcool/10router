@@ -1,5 +1,6 @@
 import PropTypes from "prop-types";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Badge, CapacityBadges, Tooltip } from "@/shared/components";
 import { isPromoFree } from "@/shared/utils/promoFree";
 import { isNightFreeHour } from "@/shared/utils/nightFree";
@@ -34,7 +35,244 @@ function useOffPeakClock(promotion) {
   return offPeakStatus(promotion, now);
 }
 
-export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, onEnable, caps, thinkingSuffix }) {
+// The two numbers only reach the OpenAI-style model list once they're positive
+// integers; anything else is treated as "not set".
+const parseCapsNumber = (v) => {
+  const n = Number(String(v).trim());
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+};
+
+// Pin context window / max output for one model (catalog windows are missing
+// or stale for many models, and clients that read context_length need the
+// real number). Saved through /api/models/caps; consumed by /v1/models,
+// /api/models badges, and server-side auto-compaction.
+//
+// Two things this panel used to get wrong:
+//   - it was styled `bg-background`, which is not a token this theme defines
+//     (the palette is --color-bg / --color-surface / --color-sidebar …), so
+//     Tailwind emitted no declaration at all and the model rows behind it read
+//     straight through the panel. It is `bg-surface` now — the opaque raised
+//     surface — with the inputs on `bg-bg` so a field is visible against it;
+//   - it was an absolutely-positioned child of the row, so it could only paint
+//     within the row list: clipped at the bottom on the last rows, and at the
+//     mercy of any ancestor stacking context. It is a portal anchored to the
+//     button now, and it opens upward when there is more room above.
+// `baseCaps` is the un-overridden value, shown per field so a pin visibly
+// replaces a real number instead of an "e.g. …" guess.
+const CAPS_PANEL_W = 300;
+
+function CapsField({ label, builtIn, value, onChange, invalid, autoFocus }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="flex items-baseline justify-between gap-2 text-text-muted">
+        <span>{label}</span>
+        {builtIn ? (
+          <span className="font-mono text-[10px] text-text-subtle">
+            {translate("Built-in")} {builtIn}
+          </span>
+        ) : null}
+      </span>
+      <input
+        type="number"
+        min="1"
+        step="1"
+        value={value}
+        autoFocus={autoFocus}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={builtIn ? String(builtIn) : translate("Not set")}
+        className={`rounded-md border bg-bg px-2 py-1.5 font-mono text-text focus:outline-none ${invalid ? "border-red-500" : "border-border focus:border-primary"}`}
+      />
+    </label>
+  );
+}
+
+function CapsEditor({ caps, baseCaps, pinned, label, onSave }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [pos, setPos] = useState(null);
+  const [cw, setCw] = useState("");
+  const [mo, setMo] = useState("");
+  const btnRef = useRef(null);
+  const panelRef = useRef(null);
+
+  const builtInCw = baseCaps?.contextWindow ?? null;
+  const builtInMo = baseCaps?.maxOutput ?? null;
+  const parsedCw = parseCapsNumber(cw);
+  const parsedMo = parseCapsNumber(mo);
+  // Empty means "no pin", so it is not a validation error; non-empty must parse.
+  const badCw = cw.trim() !== "" && parsedCw === null;
+  const badMo = mo.trim() !== "" && parsedMo === null;
+  // Not blocked, just flagged: a catalog value that contradicts itself is worth
+  // seeing before it is saved, but it is the user's number to set.
+  const inverted = parsedCw !== null && parsedMo !== null && parsedMo > parsedCw;
+  const canSave = !busy && !badCw && !badMo;
+
+  const place = useCallback(() => {
+    const el = btnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const w = panelRef.current?.offsetWidth || CAPS_PANEL_W;
+    const h = panelRef.current?.offsetHeight || 300;
+    const margin = 8;
+    const below = window.innerHeight - r.bottom - margin;
+    // Only flip when the other side genuinely has more room, so a short viewport
+    // does not oscillate between the two.
+    const flip = below < h && r.top - margin > below;
+    setPos({
+      left: Math.min(Math.max(margin, r.right - w), Math.max(margin, window.innerWidth - w - margin)),
+      top: flip ? undefined : r.bottom + 6,
+      bottom: flip ? window.innerHeight - r.top + 6 : undefined,
+    });
+  }, []);
+
+  // Re-read the effective values on every open so caps that changed elsewhere
+  // (custom-model edit, another tab) show up. Done here rather than in an effect
+  // keyed on `open`: setState-in-effect is both a lint error and a cascading
+  // render, and the panel is only ever opened from this one button.
+  const toggle = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setCw(caps?.contextWindow ? String(caps.contextWindow) : "");
+    setMo(caps?.maxOutput ? String(caps.maxOutput) : "");
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (panelRef.current?.contains(e.target) || btnRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    // A fixed panel does not follow its row, and the page scrolls the list —
+    // re-anchor (or close) rather than drift away from the button.
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+
+  // Runs once the panel is in the DOM, so the flip uses its real height instead
+  // of the estimate the first pass had to guess.
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, place]);
+
+  const submit = async (clear) => {
+    setBusy(true);
+    try {
+      await onSave(clear
+        ? { contextWindow: null, maxOutput: null }
+        : { contextWindow: parsedCw, maxOutput: parsedMo });
+      setOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        ref={btnRef}
+        onClick={toggle}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={`rounded p-0.5 transition-colors hover:bg-sidebar ${pinned ? "text-primary" : "text-text-muted hover:text-primary"}`}
+        title={translate("Model limits")}
+      >
+        <span className="material-symbols-outlined text-sm">tune</span>
+      </button>
+      {open && typeof document !== "undefined" && createPortal(
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label={translate("Model limits")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && canSave) {
+              e.preventDefault();
+              submit(false);
+            }
+          }}
+          style={{
+            position: "fixed",
+            width: CAPS_PANEL_W,
+            left: pos?.left ?? 0,
+            top: pos?.top,
+            bottom: pos?.bottom,
+            visibility: pos ? "visible" : "hidden",
+          }}
+          className="z-50 flex flex-col gap-2.5 rounded-xl border border-border bg-surface p-3 text-xs shadow-[var(--shadow-elev)]"
+        >
+          <div className="flex items-center justify-between gap-2 border-b border-border-subtle pb-2">
+            <span className="min-w-0 truncate font-medium text-text">{label || translate("Model limits")}</span>
+            {pinned ? (
+              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                {translate("Overridden")}
+              </span>
+            ) : null}
+          </div>
+          <CapsField
+            label={translate("Context window")}
+            builtIn={builtInCw}
+            value={cw}
+            onChange={setCw}
+            invalid={badCw}
+            autoFocus
+          />
+          <CapsField
+            label={translate("Max output")}
+            builtIn={builtInMo}
+            value={mo}
+            onChange={setMo}
+            invalid={badMo}
+          />
+          {(badCw || badMo) && (
+            <p className="text-[10px] leading-snug text-red-500">
+              {translate("Enter a whole number greater than 0")}
+            </p>
+          )}
+          {inverted && (
+            <p className="text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+              {translate("Max output is larger than the context window")}
+            </p>
+          )}
+          <p className="text-[10px] leading-snug text-text-muted/70">
+            {translate("Overrides the built-in catalog values")}
+          </p>
+          <div className="flex items-center justify-end gap-2 border-t border-border-subtle pt-2">
+            <button
+              className="rounded px-2 py-1 text-text-muted hover:text-red-500 disabled:opacity-40"
+              onClick={() => submit(true)}
+              disabled={busy || !pinned}
+            >
+              {translate("Restore built-in")}
+            </button>
+            <button
+              className="rounded bg-primary px-2.5 py-1 text-white disabled:opacity-50"
+              onClick={() => submit(false)}
+              disabled={!canSave}
+            >
+              {translate("Save")}
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, onEnable, caps, baseCaps, thinkingSuffix, onSaveCaps, capsPinned }) {
   const hour = useLocalHour();
   const displayModel = thinkingSuffix ? `${fullModel}(${thinkingSuffix})` : fullModel;
   // Credit cost multiplier (registry `rateMultiplier`, published per model by
@@ -117,12 +355,21 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
                   variant={offPeak.active ? "success" : "default"}
                   className="shrink-0 cursor-help leading-none"
                 >
-                  <span className="material-symbols-outlined text-[10px] align-[-1px]">eco</span>
+                  <span className="material-symbols-outlined align-[-1px]" style={{ fontSize: 10 }}>eco</span>
                 </Badge>
               </Tooltip>
             )}
           </span>
         </div>
+        {onSaveCaps && (
+          <CapsEditor
+            caps={caps}
+            baseCaps={baseCaps}
+            pinned={capsPinned}
+            label={model.name || fullModel}
+            onSave={onSaveCaps}
+          />
+        )}
         {onTest && (
           <div className="relative shrink-0 group/btn">
             <button
@@ -206,5 +453,10 @@ ModelRow.propTypes = {
   onDisable: PropTypes.func,
   onEnable: PropTypes.func,
   caps: PropTypes.object,
+  // Un-overridden caps, so the editor can show what a pin replaces.
+  baseCaps: PropTypes.object,
   thinkingSuffix: PropTypes.string,
+  // Present on the provider page: enables the per-model context-window pin UI.
+  onSaveCaps: PropTypes.func,
+  capsPinned: PropTypes.bool,
 };

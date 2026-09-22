@@ -2,9 +2,88 @@
 
 > 面向用户的精简更新见 [`public/i18n/changelog/`](https://github.com/techysy/10router/tree/main/public/i18n/changelog)（`en.md` / `zh-CN.md` / `zh-TW.md`，仪表盘「Change Log」按界面语言加载对应文件）。本文件为完整开发日志，按版本从上往下排列。
 
-## v1.1.3 (2026-09-18)
+## v1.1.4 (2026-09-20)
 
 ### ✨ 新功能
+
+- **变更日志只渲染到已发行版本**：仪表盘 Change Log 从仓库 `main` 拉取（旧版本用户能看到后续更新），但开发期写入的「未来版本」条目会立刻到达所有已安装客户端，告知用户自己并没有的功能。现以 `/api/version` 的 npm 已发版本与自身构建版本两者较高者为上限，截掉高于它的版本段；完全离线 / 版本未知时回退为不截断（旧行为），绝不会出现空白弹窗。附 12 例回归（`changelog-release-cap.test.js`）。
+- **StepFun（阶跃星辰）全系列原生接入与多媒体能力隔离**：
+  - **四通道拆分与极简短别名（国内站 / 国际站 × 按量 / Step Plan）**：`stepfun-cn`（国内站按量，`api.stepfun.com/v1`）、`stepfun`（国际站按量，`api.stepfun.ai/v1`）、`stepfun-plan-cn` / `stepfun-plan`（对应站点 Step Plan 套餐渠道，Base URL 带 `/step_plan` 前缀，**消耗套餐 Credit，不扣现金/代金券**）。暴露极简短别名 `stepp-cn`、`step-cn`、`stepp`、`step`（并全兼容通配 `sfp-cn`、`step-plan-cn`、`sfpcn` 等候选），模型调用从 `stepfun-plan-cn/step-5-preview` 缩减为 `stepp-cn/step-5-preview`。既有 `stepfun` 连接经 DB 迁移（`002-stepfun-cn-rename`）自动归入 `stepfun-cn`，停用模型 / 参数覆写 / 卡片顺序等旧键同步迁移，绝不误接到国际站。四张卡片的显示名分别为 `StepFun CN` / `StepFun` / `StepFun CN Plan` / `StepFun Plan`——套餐渠道原名 `StepFun CN Step Plan` / `StepFun Step Plan` 与 `StepFun` 叠字，现简化为「同渠道 + Plan」。
+  - **Step Plan 智能路由模型**：接入套餐专属的 `step-router-v1`（按任务复杂度自动调度上游）；Step Plan 渠道同时提供 Anthropic 原生 Messages（Claude Code 可直接接入 `…/step_plan`，消耗套餐 Credit）。
+  - **大语言模型（LLM / Chat）**：纯正文本与视觉模型 `step-5-preview`、`step-3.7-flash`、`step-3.5-flash`、`step-3.5-flash-2603`、`step-1o-turbo-vision`，严格隔离于主菜单【模型提供商】与默认 `/v1/models`。
+  - **语音合成（TTS）**：接入 StepAudio 系列 `stepaudio-3-tts`、`stepaudio-2.5-tts`、`step-tts-2`、`step-tts-mini`（Step Plan 渠道为 `stepaudio-2.5-tts`），隔离至【媒体提供商 -> 语音合成】与 `/v1/models/tts`，默认音色设为 `cixingnansheng`（磁性男声，避免 OpenAI 默认 alloy 触发 400）。
+  - **语音识别（STT / ASR）**：接入 `stepaudio-2.5-asr`，隔离至【媒体提供商 -> 语音识别】与 `/v1/models/stt`。
+  - **图像生成（未放出，直接下架）**：官方公告（`docs/zh/guides/image-offline-notice`）`step-2x-large` / `step-image-edit-2` 与国内外 `/v1/images/{generations,image2image,edits}`、`/step_plan/v1/images/*` 于 2026-10-10 同步停服（`step-1x-edit` 更早已不可调用），实测下线前该服务已持续返回 503。故本次不放出图像能力：不再暴露 `kind:"image"` 模型、`imageConfig` 与 `serviceKinds` 中的 `"image"`，【媒体提供商 -> 图像生成】与 `/v1/models/image` 里不再出现 StepFun 四条渠道（`stepfun` / `stepfun-cn` / `stepfun-plan` / `stepfun-plan-cn`）。
+  - **实时余额与代金券查询**：对接 `GET /v1/accounts`，国内站按 CNY、国际站按 USD 展示现金与代金券余额（Step Plan 渠道无公开额度 API，不显示用量卡）。
+  - **官方高清图标**：注入官方透明 PNG 图标，覆盖大模型卡片与各媒体管理界面。
+  - **模型类型图家族聚合**：`modelFamilyName` 新增品牌归一映射，把同一品牌的不同产品线前缀折叠成单一族——StepFun 的 `stepaudio-*`（TTS/ASR）与 `step-*`（LLM/视觉/图像）在「模型类型」用量图里不再拆成两根柱，统一聚合为 `step`。剥离 provider 前缀后匹配，覆盖 `stepp-cn/…`、`step-cn/…` 等带渠道别名的 id。附回归用例（`model-family-chart.test.js`）。
+
+- **媒体供应商列表支持拖拽排序与已连接前置**：此前只有主【模型提供商】页的卡片可拖拽重排（持久化 `providerCardOrder`）并按连接状态自适应置顶；媒体供应商列表（图像 / 语音合成 / 语音识别 / 向量 / 视频 / 音乐，以及合并后的 Web Search / Web Fetch 页）此前是纯注册表 `priority` 顺序——既不能拖拽，已连接的供应商也不会浮到前面。现两处共用同一套排序与持久化口径：排序链 = 连接状态 rank（已连接或免鉴权启用 → 0；免鉴权关闭 → 1；已配置但全部连接禁用 → 2；从未配置 → 3）→ 手动拖拽顺序（`providerCardOrder`）→ 注册表 `priority` → 名称。拖拽仍走原生 HTML5 并写入同一全局 `providerCardOrder`，所以任一面板的拖拽在其它面板同样生效，`/v1/models` 的 provider 顺序保持一致。连接状态统计（model lock 冷却判定、禁用连接不计入已连接）与排序／换位数学抽到共享模块 `src/shared/utils/providerCardOrder.js`，拖拽卡片抽到 `src/shared/components/DraggableCard.js`，主 providers 页改为复用同一实现（行为与既有 lint 基线不变）。附 `provider-card-order.test.js`（20 例：rank / 比较器 / 换位 / 边界）。
+
+- **ComfyUI 本地生图原生执行器实装**：
+  - 接入本地 ComfyUI 实例（默认 `http://127.0.0.1:8188`），实装自动发现本地可用 Checkpoints、动态装配 SD / SDXL / Flux 标准文生图图工作流并排队轮询输出，经 `/v1/images/generations` 统一返回标准 base64 图像。
+
+- **Qoder 签到与额度识别优化**：
+  - 增强 Qoder 国际版与国内版签到容错，清晰展示当前账号代金券与 Credits 状态。
+
+### 🐛 修复
+
+- **小米 MiMo 浏览器登录在局域网 / HTTP 访问下完全不可用**：连接弹窗生成 OAuth `state` 时直接调用 `crypto.randomUUID()`，而该 API **仅存在于安全上下文**（HTTPS 或 localhost）。从另一台设备以 `http://局域网IP:20128` 打开仪表盘（NAS / 自托管的常态访问方式）时它是 `undefined`，点击「浏览器」直接抛 `crypto.randomUUID is not a function`；又因为服务端 `/authorize` 强制要求客户端提供 `state`（缺失返回 400 `Missing state`，X25519 密钥对需绑定该字符串），整条浏览器登录链路被彻底堵死。新增浏览器安全 `uuid()` 工具：优先原生 `randomUUID`，否则用不受安全上下文限制的 `getRandomValues` 拼出 v4（正确置版本 / 变体位），全无 WebCrypto 时再降级；附 5 例回归用例（`browser-safe-uuid.test.js`）覆盖三种运行环境。同一弹窗里的桌面凭据自动导入与手动 API 密钥两条路径不受影响。
+- **StepFun 连接测试报「Provider test not supported」**：StepFun 四个渠道（国内站 / 国际站 × 按量 / Step Plan）此前未在连接测试分支注册，仪表盘「逐个测试连接」与单连接测试对**健康密钥**也一律返回 `Provider test not supported`。现统一走通用 OpenAI 兼容校验（`GET {base}/models` + `Authorization: Bearer`）：`stepfun-cn`→`api.stepfun.com/v1/models`、`stepfun`→`api.stepfun.ai/v1/models`、`stepfun-plan-cn`→`api.stepfun.com/step_plan/v1/models`、`stepfun-plan`→`api.stepfun.ai/step_plan/v1/models`（Step Plan 仅 `/accounts` 额度路由 404，`/models` 正常）。401/403 判为无效密钥、网关 HTML/403 判为维护中，与其余通用渠道一致。附离线回归用例（`stepfun-connection-test.test.js`，mock fetch 校验路由与判定，不依赖真实网络）。
+- **小米 MiMo 周套餐额度耗尽提示渲染为原始 JSON**：周套餐用尽时上游返回 `[403]: {"error":{"message":"本周用量已满…","code":"subscription_quota_exhausted","biz_code":30011}}`，而 `translateQuotaError` 此前只认识 Google 的 429 形态，原始 JSON 直接铺进连接行并被 380px 截断。新增窄匹配分支（仅 `subscription_quota_exhausted` / 「本周用量已满」，**刻意不含裸 `quota_exhausted`** —— Google payload 里的 `QUOTA_EXHAUSTED` reason 必须继继走自己的带倒计时分支），命中后显示「该账号额度已用完，请等待重置。」。附真机 payload 回归用例。
+- **到期 / 重置倒计时跨天被折叠**：连接行到期徽标把 41 小时显示成 `1d`（实为 `1d 17h`），额度重置倒计时则写成「41小时」。`formatExpiry` 两处同步改为 `Xd Yh`（恰好整天数不追加 `0h`），`formatQuotaDuration` ≥24h 折叠为「1天17小时」；新增 `{n}d` 词条。附 `expiry-countdown-format.test.js`。
+- **小米 MiMo（Token Plan）独立供应商按桌面版实态更新**：反编译 MiMo Desktop `app.asar` 拿到官方分区域套餐目录（token-plan-cn / sgp / ams 三区模型集完全一致）：删除套餐集群根本不存在的 `mimo-v2-omni`（调用必 404，来由「目录太旧」）；四个语音模型补 `kind:"tts"`（此前会混入聊天模型列表），并为 tokenplan 接入共享 MiMo 语音适配器（区域路由）+ `serviceKinds: [llm, tts]`；官方已弃用的 `mimo-v2-pro` 改名标注 legacy；默认集群 sgp→cn（与桌面版 plan 预设一致，存量连接已存显式 region 不受影响，海外出口仍自动匹配）；控制台链接指向 platform.xiaomimimo.com；provider 优先级 300→21，卡片紧挨基础 MiMo。同步重录 `providers-baseline.json`（与 StepFun 拆分时的惯例一致）。
+- **Token Plan 浏览器登录的端点路由**：平台 OAuth 回传的 `url`（桌面版正是用它区分 plan / billing：auth.json metadata.base_url）此前只入库不参与路由 —— chat / TTS / 连接测试一律打在按量集群，套餐订阅账号登录后访问错集群。现在 xiaomi-mimo 执行器 `buildUrl`、MiMo TTS 适配器、连接测试探测地址均优先使用连接存储的集群（按量账号重建结果与原 transport 字节一致，行为不变）；套餐集群沿用「403 容忍、401 才判无效」的既有语义。新增共享 `normalizeMimoApiBase` 把任意形态的存储端点规范到 `https://host/v1`。
+- **MiMo TTS 裸模型名被静默改写**：适配器的已知模型列表只有 `mimo-v2.5-tts`，`parseModelVoice` 会把不在列表里的裸模型（如 `mimo-v2-tts`）改写成默认模型 —— 四个套餐语音模型接入后此问题会真实触发，列表补全。
+- **MiMo 浏览器登录挂起密钥无上限**：与桌面版对齐 `cap:8` —— 每个挂起会话持有一把 X25519 私钥，24 小时粘贴窗口不应变成无界密钥缓存；超出时淘汰最旧。
+- **Combo 空回复自动回退（#10）**：部分上游（Z.ai/GLM 系等）把内容审查表达为 HTTP 200 空流 —— 流正常打开、以 `finish_reason:"sensitive"`/`content_filter` 终止且零输出 token，combo 的 `result.ok` 短路把空白回复直接交给客户端。新增可选「空回复时切换」（策略面板 Toggle，默认关；`comboStrategies[name].retryOnEmpty`，全局兜底 `settings.comboRetryOnEmpty`）：仅当仍有后备模型时窥探 2xx 流头部，终结时没有任何有效内容（正文/推理/工具调用）即落到下一个模型；首个有效增量立即放行（头部缓冲字节级无损重放，单一 TextDecoder 保住跨 chunk 的 CJK 字符）。仅对 SSE/JSON 生效，音频/图像二进制流不受影响；被放弃的调用已消费至终结，用量照常入账；最后一个模型永不窥探（空 200 优于合成 5xx）；单请求默认最多烧 2 个模型（`retryOnEmptyLimit`，按 combo / 全局 `comboRetryOnEmptyLimit` 可调 —— 重放会重新计费完整输入，报告人案例是 1.5M token 上下文），后备目标与主模型同厂时在日志中告警（大概率撞同一过滤器）。翻译层会归一化 filtered finish reason，故判据取「终结且零有效内容」而非 reason 本身（原始 filtered 令牌仍机会性识别）。另修复 combos 页策略修剪逻辑：在默认 fallback 策略下开启该开关时，整个 comboStrategies 条目会被连带删除、开关静默失效。附 `combo-retry-on-empty.test.js`（28 例）。
+- **Claude Code 自动模式分类器经网关恒不可用（#18）**：auto mode 的 `xml_2stage` 分类器走「claude → openai → 上游」链路时，`stage1ParseAttempts:1` / `stage2ParseAttempts:0`，harness 报 `… is temporarily unavailable, so auto mode cannot determine the safety of Bash`。根因三处：
+  1. **翻译层静默丢弃 stop 序列**：`claudeToOpenAIRequest` 是白名单式重建请求体，从未把 `stop_sequences` 映射为 OpenAI `stop`（反向 `openaiToClaudeRequest` 同样丢弃 `stop`）。分类器 stage-1 依赖 `max_tokens:64 + stop_sequences:["</block>"]` 让模型**吐出判定标签就地停住**，丢了这个参数后模型继续往 `<category>/<reason>` 写，64 token 预算把整轮截断。两个方向现均映射，并限制在 Anthropic 的 4 条上限内（空值/非字符串过滤、未传时不落字段）。
+  2. **上游无视 stop，由网关代执行**（cbcn 直连实测：带 `stop:["GAMMA"]` 仍返回完整字符串）：新增 `open-sse/utils/stopSequenceGuard.js`，在 SSE 转发层执行客户端要求的 stop 契约 —— 生成文本出现该序列即就地切断、**序列本身不发出**（Anthropic / OpenAI 语义一致，客户端解析器的闭合标签本就是可选的：`/<block>(yes|no)\b(<\/block>)?/`、`/<severity>\s*(\d+(?:\.\d+)?)\s*(<\/severity>)?/`）。设计取舍：只扣留「确实是某个 stop 前缀」的尾部（普通文本原样透传、不产生额外重组），跨 delta 切断的序列照样命中；上游不认 stop 时仍继续转发后续分片但**剥掉正文**（保留 `usage` —— 分类器要读 `usage.input_tokens`，丢掉它等于换一种失败）；把上游的 `finish_reason:length` 改写为正常 stop（`max_tokens` 正是客户端丢弃答案的原因）；上游本就守规矩的不受影响（输出里已无该序列，扫描为空、字节级透传）；**仅对 SSE 文本流生效**，Kiro 那类二进制 EventStream 不做解码/重编码以免破坏字节。stop 同时从**客户端原始请求体**读取（意图的真实来源，未被任何翻译器映射的 stop 也必须执行）。
+  3. **cbcn + 非流式 + claude 客户端返回 OpenAI 形状**：强制流式供应商回聚合成 JSON 时跳过了客户端格式翻译，Anthropic 客户端取 `content` 得到 undefined。`handleForcedSSEToJson` 现走与普通非流式相同的翻译路径（由 chatCore 注入，避开 `sseToJsonHandler ↔ nonStreamingHandler` 的循环导入）。
+
+  实测（Windows 桌面版，真分类器提示词 + `l4e()` / `r4e()` 用二进制里的原版解析器判定）：修复前 `<block>yes</block><category>…<reason>…`（被 64 token 截断）→ 判定 `null` → `unavailable`；修复后 `<block>yes` / `stop_reason:end_turn` / `l4e()=true`，severity 模式 `<severity>10` 且 `r4e()=10`。**反证**：同一请求不传 stop 时完整输出 `<block>yes</block>` 原样透传，说明截断是契约执行而非副作用。附 `stop-sequence-guard.test.js`（24 例）、forced 路径客户端格式 3 例、wiring 守卫 8 例、`openai→claude` 映射 4 例。
+- **不再有内置默认密码：未设密码时仪表盘仅本机可访问（#9 第 1/3/4 项）**：v1.0.7 审计指出「默认全网卡监听 + 未设密时 123456 兜底 + 凭据明文落库」三者叠加会一步打穿防护。本次斩断「口令兜底」整条腿：
+  - **服务端**：`dashboardSession.js` 删除 `DEFAULT_PASSWORD`，`INITIAL_PASSWORD` 成为唯一的非交互式引导口令 —— 未设置时任何口令都不通过（而不是落回 123456）；`/api/settings` 的「首次设密」分支不再把字面量 `123456` 当合法 `currentPassword`（审计点名的「复活路径」）。
+  - **权限模型**：未设密码（且无 SSO）时，回环来源视为可信 —— 本机操作员必须能进去设密码，否则「登录要密码、设密码要登录」直接死锁；**非回环来源一律拒绝**（401 / 跳登录页），它没有任何可校验的凭据。设完密码后行为与之前完全一致，`requireLogin=false` 这一显式选择不受影响（端点页的裸奔告警照旧）。
+  - **登录页**：不再显示「默认密码 123456」；远程用户看到的是「尚未设置密码，请在运行 10Router 的机器上打开仪表盘设置，或用 `INITIAL_PASSWORD` 启动」，本机用户直接给「打开仪表盘」按钮。
+  - **CLI**：设置菜单的「重置密码」此前把密码重置回 `123456`（同一条复活路径）。服务端仍只负责清空哈希，CLI 改为生成 **12 字节随机密码**并显示一次，登录后可在 Web UI 改掉。
+  - **fnOS 打包**：首次安装写入 `.env` 的 `INITIAL_PASSWORD=123456` 改为**随机生成**并打印在安装日志；安装 / 升级回调把旧占位值 `change-me` 也换成随机值（此前同样换成 123456）；启动脚本改为从 `.env` **读回**该值 —— 环境变量优先级高于 `.env`，旧逻辑里的常量兜底会把刚生成的随机密码覆盖掉。
+- **新增「安全」卡片（设置 → 实验性）**：把暴露面的事实与开关放在一起 —— 监听地址与局域网可达 URL、密码是否已设、登录校验是否开启、仪表盘访问范围，以及一个「仪表盘仅本机访问」开关（默认关，请求级生效、无需重启）。开启后非本机来源对仪表盘与管理接口的请求一律 403，**LLM 接口（`/v1`）不在此列**（它用自己的 API key 鉴权，把网关放到局域网正是本产品的主场景）。配套只读自检接口 `/api/security/status`（需鉴权）。附 `dashboard-no-default-password.test.js`（26 例：口令校验 / 引导态判定 / 守卫接线 / CLI 与 fpk 打包的静态守卫）。
+- **安全提示补齐（#9 第 2/3/4 项的「提示」部分）**：
+  - **仪表盘级常驻警告横幅**（挂在布局上，所有页面可见）：未设密码时提示「只能在本机打开」，登录校验被关闭时提示「任何能访问该端口的人都能管理全部供应商、密钥与凭据」，并直接给出去「设置」页的入口 —— 这两条此前只在端点页有告警，而操作员不一定会打开那一页。探测接口失败或状态正常时**不渲染**（不会把探测失败变成惊吓横幅）。
+  - **关闭「要求登录」需二次确认**（与早已存在的「要求 API 密钥」一致）：弹窗写明「关闭后任何能访问该端口的人都无需密码即可管理全部供应商、密钥与凭据，且仪表盘会持续显示警告横幅」；重新开启仍是一键。
+  - 「安全」卡片新增一项自检：**凭据存储 = 本地数据库明文（计划加密）** —— 第 2 项仍未落地，只报开关状态会让人误以为实例已经干净。
+  - **i18n**：本次新增的安全文案全部补齐 zh-CN / zh-TW，并顺手补上登录页与 SSO 卡片此前缺失的 8 条词条（zh-TW 此前只有 654 条，约为 zh-CN 的 1/3，缺词条会静默显示英文）。新增回归用例逐条断言这些字符串在两个语种表里都存在。
+- **凭据加密落库（#9 第 2 项，曾拆为 #30）**：`providerConnections.data` 里的 OAuth `accessToken` / `refreshToken` / `idToken` 与 `apiKey`（含 `providerSpecificData` 里名字像密钥的字段，如 xiaomi-mimo 的 `mimoPassToken`、内嵌账密的 `connectionProxyUrl`）不再明文存储 —— 审计指出「DB 文件被备份/同步/拷走即全部泄露」是三项高危里唯一没动的一条。
+  - **实现**：AES-256-GCM，`enc:v1:<iv>:<tag>:<ciphertext>`（base64url）存于同一列。**加密/解密发生在 repo 的 `rowToConn`/`connToRow` 两个唯一出入口**，因此全应用（含拉 token 调上游的热路径）无感，无需改任何调用方；非密钥字段（到期时间、配额快照、模型锁…）仍可读，数据库仍可排查。
+  - **密钥不进库**：优先 `CREDENTIAL_SECRET`（容器/fnOS 注入），否则自动生成 `$DATA_DIR/credential-key`（0600）—— 数据库是会流转的那个，密钥不能跟着走。
+  - **向后兼容 + 存量迁移**：无 `enc:v1:` 前缀的值按明文处理（旧库照用、写入即加密），并有一次性的 `003-encrypt-credentials` 迁移把既有行加密；两者都幂等。
+  - **失败不静默**：密钥丢失/换过（还原了别人的库、改了 `CREDENTIAL_SECRET`）时**不会**把凭据当空值（那会静默停用账号），而是把该连接标为 `unavailable` 并写明「Credentials unreadable」，仪表盘可见。
+  - **「安全」卡片**改为实际读取数据库状态：`凭据存储：本地数据库加密存储（AES-256-GCM）`；若某行因数据目录不可写而未能加密则显式告警，并提示「密钥在库外，备份需连密钥文件一起（或设 `CREDENTIAL_SECRET`）」。附 `credential-encryption.test.js`（15 例：密码学往返 / 幂等 / 篡改与错钥报错 / 字段覆盖 / repo 往返 / 刷新路径不双重加密 / 存量迁移幂等）。
+- **用量日志不再落全量 API key（#9 第 5 项）**：`usageHistory` 是库里最大、增长最快、也最常被截图/导出/贴进 issue 的表，而它**每一行都存完整的 `sk-…`**；更隐蔽的是 `usageDaily.data`（按天聚合）把同一把 key **又存了两份** —— 一份在聚合项的 `apiKey` 字段，一份在**聚合项的 map key** 里。
+  - 现在只存两样东西：**展示用的掩码**（`sk-496f00***`）和**分组/查名用的 SHA-256 摘要**（新增 `apiKeyHash` 列 + 索引）。日志本来就只需要这两件事 —— 它从不把 key 取回来用。
+  - 连带改的地方：每日聚合的 map key 从 `原key|模型|供应商` 换成 `摘要|模型|供应商`；按 key 查名字（`apiKeys` 表）改成按摘要建映射；写入时的去重比对（两处）改成比摘要。
+  - 一次性迁移 `004-usage-apikey-digest` 重写存量行与聚合（幂等；已掩码/已有摘要的跳过），兼容读：旧聚合里残留的 `apiKey` 会被现场转成摘要，**升级前的历史统计不会丢 key 名字**。
+  - 在真实库副本上实测：3024 行 / 20 个按天聚合（87 处 raw 值 + 87 处 raw map key）→ 迁移后 **残留 0**，聚合请求总数 3024 不变，摘要能解析出名字；重跑不改文件（幂等）。附 `usage-apikey-digest.test.js`（7 例）。
+- **MiMo Token Plan 卡片改名 + 官方图标 + 额度行说明（含 i18n）**：
+  - **改名**：`Xiaomi MiMo (Token Plan)` → **`MiMo Token Plan`**（卡头太长，且父卡已经叫 Xiaomi MiMo，重复前缀是噪音）。
+  - **官方图标**：新增 `public/providers/xiaomi-tokenplan.png`，不再回退到 `smart_toy` / `XT` 占位。
+  - **额度行不再显示「未实现」**：`tp-` 密钥所在的 token-plan 集群**没有任何额度接口**（实测：`token-plan-cn/sgp/ams` 上逐一试过的候选路径全部 404（openresty），而带周额度的 `aistudio.xiaomimimo.com/open-apis/v1/user/usage` 对 `tp-` 密钥返回 401 —— 它要的是 MiMo **账号会话**，不是套餐密钥）。此前该供应商没注册 usage handler，额度行直接回退成英文原句 `Usage API not implemented for xiaomi-tokenplan`。现注册 handler：若该连接另外带桌面端账号会话（`mimoPassToken`）就照旧读周额度，否则给出一句**说明性文案**（已译 zh-CN / zh-TW），并在官方控制台看套餐用量。
+  - **横幅 i18n**：`display.notice.text`（“Xiaomi MiMo Token Plan subscription (API key starts with tp-)…”）补上 zh-CN / zh-TW —— 此前只有英文（与 AMD/byteplus/grok-cli 等同类横幅一起漏掉）。附 `mimo-tokenplan-wiring.test.js`（8 例）。
+- **安全审计收尾三项（#9 第 7 / 8 / 11 项）**：
+  - **第 11 项 `/api/version`、`/api/init` 不再对网络公开**：两者从公开白名单移出，改为**仅本机（或已登录）可达** —— CLI 的陈旧进程探测/`doctor`、桌面壳的更新检查都是访 `127.0.0.1` 轮询，照旧 200；徽章/登录页带会话 cookie 也是 200；未鉴权的远程调用现在 **401**（此前可用来指纹识别构建版本与更新状态）。`/api/health` 仍公开（托盘/浏览器需要），`/api/version/shutdown` 与 `/update` 本就在 ALWAYS_PROTECTED 里且先于该白名单判定。实测（临时关掉「仅本机」开关以避免被它先拦）：本机 200 / 局域网 401 / 局域网 `/api/health` 200 / 局域网 shutdown 401，验完已还原开关。
+  - **第 8 项 会话从 24h 缩到 2h，并改为滑动续期**：泄露的 cookie 从“可用一整天”变成“两小时内失效”，而**正在使用的操作员不会被打断** —— `/api/auth/status`（仪表盘每次导航都会调，头部组件按路由重挂载）在会话过半时自动重新签发并保留身份声明。附回归：2h 的 exp 与 cookie maxAge 一致、新鲜令牌不续期、过半则续期且保留 oidc/saml 声明。
+  - **第 7 项 MITM 密码加密不再有常量兜底**：原实现在取不到机器码时回退到 `sha256("10router-mitm-pwd")` —— 一个写在本仓库里的密钥，意味着那个“加密”文件对任何拿到源码的人都可解。现在取不到机器码就**报错拒绕**（保存失败会落日志，下次操作重新询问密码），不做假安全。
+  - 附 `security-audit-leftovers.test.js`（10 例）+ 更新两处原本锁定 24h 旧契约的用例。
+
+## v1.1.3 (2026-09-20)
+
+### ✨ 新功能
+
+- **按模型上下文窗口 / 最大输出覆写（Context window pins）**（`92c35885`）：模型行新增调参图标，可对任意（含自动发现的）模型钉住 `contextWindow` / `maxOutput`；存 SQLite（`modelCaps` 作用域，与停用模型同为节点级，OAuth/导入导出自动跟随），优先级 = 钉住值 > 自定义模型自带值 > 目录默认，`/v1/models`、`/api/models` 徽标与用量口径同步生效；留空即回退默认。
+
+- **超长上下文服务端自动压缩（Auto-compact）**（`cb4ec67f`）：客户端不自压缩（ZCode / OpenClaw / 自建 agent 直投全量历史）时，请求在派发前估算超过有效窗口的 90%（阈值 80/90/95% 可选，默认开）即由**同一模型**在带内部护栏头 `x-9r-internal-compaction` 的自调用里把较早轮次摘要化，摘要折入保留段首条消息（不产生连续 user 消息，Anthropic 严格形态安全）；`system`、最近 8 条与工具定义原样保留，切点保证不拆散 tool_use/tool_result 配对。任何失败（摘要调用错误/超时/格式不支持/responses 端点）原样放行，绝不因压缩器毁请求；CJK 感知的字符估算 + 4k token 热路径地板，小请求零开销。总开关在「实验特性」卡片。
 
 - **Qoder 国内版（qoder-cn）完整恢复**（`a9b4a229`）：从删除前基线恢复 provider 注册表、OAuth 设备码流程、PAT→job-token 换取、模型目录与用量跟踪；不触碰隐藏供应商策略（trae / windsurf / devin-cli 继续不入库）。配套 `5b89d046` 修复模型家族映射——Qoder 内部代号（`qfmodel` / `qmodel*` / `qwq*` → qwen，`dmodel` / `dfmodel` → deepseek 等）在连字符/版本号剥离前先归一，用量图表不再按代号碎片分组。
 
@@ -15,9 +94,42 @@
 
 - **Qoder 资源包逐包展示**（`2a659730`）：从已领取（`claimStatus=CLAIMED`）的 CREDITS campaign 重建每个资源包（金额 / 到期时间 / 消耗按**先到期先扣**从聚合 `addOnQuota.used` 分摊），`quotas.addOn.packs` 输出，仪表盘逐行显示「赠送包 N」各带自己的到期日；聚合「资源包」行保留（官方口径的权威总量）。
 
+- **OpenCode Free 体验渠道反滥用修复与默认开启**（`54ec08e7`）：
+  - 针对 OpenCode 线上新增的反滥用检测，实装 4 层伪装拦截防护：User-Agent 规范版本化（`opencode/1.18.31`）、`ses_` 30 位规范会话生成与跨请求确定性映射、请求级 `bash`/`read` 隐真工具（decoy tools）注入（`tool_choice: "none"`）、强制流式连接（`stream: true`）。实测 `big-pickle`、`nemotron-3-ultra-free`、`nemotron-3.5-lightning-free`、`mimo-v2.5-free`、`ling-3.0-flash-fin-free` 100% 畅通秒吐字。
+  - 体验渠道默认从拓扑隐藏改为**默认展示**（`topologyHiddenByDefault: false`），开箱即用。
+
+- **反重力（Antigravity）生图模型补齐**（`54ec08e7`）：
+  - 补录 Google 内部端点原生支持的 **`gemini-3-pro-image`**（Gemini 3 Pro 高清图像生成）、**`gemini-2.5-flash-image`** 与 **`imagen-3.0-generate-002`**（Imagen 3）。
+  - 同步扩充 `open-sse/services/usage/google.js` 的配额拉取白名单，使得 Pro 级图像生成可在仪表盘正确显示配额与状态。
+
+- **上游 v0.5.81 稳定性核心缺陷修复移植**（`81bdc69e` + `0b414322` + `81c040ed`）：
+  - **P0-1（4xx 请求级错误不冷却健康账号）**：`checkFallbackError` 针对 400（上下文超长、畸形 body 等请求自身错误）短路跳过账号冷却，避免单账号场景下连续误报「账号不可用」并连带封锁其他无关会话。
+  - **P0-2（连接测试成功自动清除陈旧模型锁与健康状态）**：连接点击测试成功时，主动清理 `modelLock_*`、`backoffLevel`、`rateLimitedUntil` 等残留锁，防止换 Key 或修复账号后仍被旧状态拦截。
+  - **P1（HTTP 200 建立后流中断 in-band 错误帧上报）**：长静默流（如思考模型、Kiro 等）异常断开或 stall 超时时，按客户端格式注入错误帧后再发送 `[DONE]`，防止客户端将截断误判为正常短回复。
+
+- **Provider 卡片拖拽排序与状态自适应**（`63b0547d` + `e85ec99b`）：
+  - **已连接卡片拖拽排序（持久化）**：Provider 列表卡片支持原生 HTML5 拖拽重排，自动持久化至全局设置 `providerCardOrder`。
+  - **移除「禁用排在最后」开关**：禁用的 provider 一律自动置底（且位于「无连接」分组之前：已连接 rank 0 → 免鉴权隐藏 rank 1 → 全部禁用 rank 2 → 未配置无连接 rank 3），删去冗余配置开关。
+  - **OAuth 凭证导入/导出开关移至单 Provider**：移出 Profile 全局设置，改在每个 OAuth Provider 详情页的配置栏中独立开启（向下兼容旧全局设置）。
+  - **Qoder / Qoder CN 手动领取 Credits 解耦**：各 Provider 详情页的手动「领取 Credits」仅对自身 provider 连接生效，不再跨 provider 触发；后台全天自动签到轮询维持一个全局开关。
+  - **QODER_CHECKIN 日志精简与人读友好**：移除长 JSON 数据 dump 与裸 UUID，连接以「Qoder CN: 用户名」标识；启动与周期刷屏合并为可读摘要，单轮完成仅输出简明汇总行。
+
+- **Qoder 实时倍率叠加与千问错峰半价/限免倒计时**（`bf820454` + `9d8c222a` + `40b78356`）：
+  - 动态叠加官方实时 `price_factor` 与 promotion（夜间限免/半价），Qwen3.8-Max / Qwen3.7-Flash 实时展示折扣倍率与优惠倒计时。
+  - 清理历史营销期虚构行（`lite` / `ultimate` / `performance` / `efficient` 等），保持与官方目录严格一致。
+  - 修复 Tailwind 非层级样式覆盖导致的叶子图标尺寸异常，对齐 10px / 16px 精确渲染。
+
 - **Qoder 官方图标**（`e804845b` / `b0b5ec87`）：从官方启动器 PE 资源提取 256×256 PNG，替换 `qoder` / `qoder-cn` 占位图标。
 
 ### 🛠️ 优化与修复
+
+- **自动压缩对推理模型的兼容修复**（`754d790c`）：test.21 线上验证发现 hy4-preview 等推理型上游会把摘要调用的 `max_tokens` 全部耗在 `reasoning_content` 上、返回空 `content`，导致压缩静默退化为原样放行——摘要自调用现在强制携带 `enable_thinking: false`（统一 thinking 翻译层按 provider 能力映射/剥离），`extractSummaryText` 在 `content` 为空时回退 `reasoning_content`（残缺摘要也好过超限硬失败），且空摘要改为显式 `[COMPACT] empty summary` 告警不再静默。实测 30k 请求（pin 窗口 30000）：`est 30248 ≥ 90% → summarized 6, kept 7`，上游 `prompt_tokens` 26905 → 14981。
+
+- **额度窗口用尽后重置时间徽章不再消失**（MiMo 周报）（`b4f2e024`）：连接卡片的到期徽章由 `extractEarliestPackageExpiry` 驱动，旧规则把「用尽」条目一律跳过——对一次性资源包正确，但周期性窗口（`recurring:true`：MiMo Weekly、CodeBuddy 基础包、commandcode）用尽时**恰恰最需要显示还剩几天重置**。现在仅非 recurring 条目受用尽过滤约束；MiMo Weekly 补上 `recurring:true` 标记；路由侧无影响（到期优先排序只发生在已过可用性检查的连接之间）。真实 payload 验证：100/100 用尽的 Weekly 现在持久化 2026-09-22 重置时间并出徽章。
+
+- **`/v1/models` 模型列表顺序跟随仪表盘卡片排序**（`e937f6e5`）：抽取共享比较器 `buildProviderOrderComparator`（手动 `providerCardOrder` → 注册表 `priority` → id 字典序），与仪表盘同一口径；未连接 provider 的孤儿自定义模型与已连接 provider 按卡片序穿插（非固定尾部），combo 永远居首；组内按原有发射序稳定排序，空 cardOrder 回退注册表默认，读失败绝不致空列表。
+
+- **严格兼容端工具 schema 顶层降级（#27）**（`dcc864b8`）：codebuddy-cn 对工具 `parameters` 根节点非纯 object（根 anyOf/oneOf/allOf、根 `$ref`、type 数组、缺 type）直接 `11129` 拒整个请求——新增 quirk 门控的转换器：仅对声明该约束的 provider 生效，根组合器展平/内联为纯 object 根（$ref 就地展开、required 按 allOf 并集/anyOf・oneOf 交集合并），嵌套层构造逐字不动；仅改写发往上游的副本，客户端原 payload / 其他 provider 字节不变；11 例回归 + 真实复现验证，线上已关闭 #27。
 
 - **Qoder 配额解析修正**（`4a550135`）：`getQoderUsage` 补解析 `addOnQuota`——原实现只读 `userQuota`，免费账户每日/活动领取的 Credits 全部显示 0/0；顺带修复 qoder-cn 配额标题与类型 i18n。
 
@@ -47,13 +159,18 @@
 
 - **小米 Token Plan 出口节点智能匹配（ip.sb 多源探测）**：官方三集群 `cn`/`sgp`/`ams` 不再需要手动猜——添加/编辑 `xiaomi-tokenplan` 连接时自动探测本机网络出口地区并预选对应节点（中国大陆/港澳台→`cn`，欧洲→`ams`，其余海外→`sgp`），节点下拉框旁提示「已根据当前网络出口自动匹配节点」，用户随时可手动改回。服务端探测接口 `GET /api/network/egress-region`（`src/lib/network/egressRegion.js`）：ip.sb geoip + 3 秒超时 + 15 分钟内存缓存 + 整链 fail-open（探测失败静默返回 null，绝不阻塞连接添加/编辑流程）。顺带修复存量缺陷：连接「测试」按钮原把 `xiaomi-tokenplan` 硬编码打向 `sgp` 集群，配置 `cn`/`ams` 的连接永远测不通——现按 `providerSpecificData.region` 动态解析测试端点，与聊天转发行为一致；小米桌面会话模型出口在海外时的探测失败提示附带回国代理指引。新增 `tests/unit/egress-region.test.js`（国家→集群映射/缓存/超时 fail-open）与 `tests/unit/xiaomi-tokenplan-test-region.test.js`（region→测试 URL 路由）锁行为。
 
+- **10router-sync 插件 v1.5.0：ZCode 大版本套餐渠道 id 适配 + 10r 同步链路加固**。
+  - **套餐渠道 id 适配**：ZCode 大版本把套餐/赠送配额渠道（智谱 Start Plan）的 provider id 从 `builtin:bigmodel-start-plan` 改为 `account:bigmodel-start-plan`，插件的官方判据从「仅 `builtin:`」扩为「`builtin:` 或 `account:`」，剥前缀规则同步扩展（新旧行在目标侧同名合并为 `zcode-bigmodel-start-plan`）。旧判据把新形态当自定义渠道跳过，导致 09-18 起套餐流量漏同步——本机实测补导 343 行到 NAS。教训入库：ZCode 大版本会改官方渠道 id 形态，漏判表现是「某渠道突然没新数据」，先看跳过计数列表里的新前缀。
+  - **gatewaySync 标记**：`--source 10r` 源库**原生**行导出时打 `meta.gatewaySync=true`，目标侧健康度评分豁免「导入行排除」（见上方「数据口径」条）；B 实例自己从客户端账本导入过的行经链式同步不打标、继续排除。
+  - **同实例防护扩展到离线回导**：10r 导出每行盖 `meta.sourceDbPath`（与 `--tag` 无关的机器可查来源），`--import` 分支识别「离线文件来自本机默认实例库 + loopback endpoint」同样以退出码 2 拒绝。
+
 - **10router-sync 插件 v1.4.0：新增 `/10router-sync:status` 实例状态监控命令**：不打开仪表盘、一条命令查看目标 10Router 实例的运行状态与今日用量摘要（版本、连接规模、今日请求数/Token/费用等），复用插件既有认证链（仪表盘会话 / CLI token `x-9r-cli-token`），与导出/导入命令同配置即用。插件发版三处版本号同步：`.zcode-plugin/plugin.json` + 根 `marketplace.json`（Discover 实际索引）+ `zcode-plugin/marketplace.json`。
 
 - **10router-sync 插件 v1.3.0：新增 10Router/9Router 实例用量同步（`--source 10r`）**。
   - 读另一个 10Router（或遗留 9Router）实例的 `data.sqlite`（`usageHistory` 表），原样透传导入目标实例——provider/cost/status/tokens/meta 全保留，同名 provider 在目标侧自然合并；适用于把 NAS 实例、兄弟中继、9Router 老安装的用量汇总进一处仪表盘。别名 `10router` / `9r` / `9router`。
   - 源库发现：`--db <path>` 显式指定（NAS 拷贝/挂载盘），否则自动发现 `%APPDATA%\10router|9router\db\data.sqlite` / `~/.10router|~/.9router/db/data.sqlite`（env `TENROUTER_DB` 优先，多库共存时提示）；`--tag` 自定义 `meta.syncedFrom` 标签；源实例 `connectionId` 挪进 `meta.sourceConnectionId` 并置空，避免污染目标按账户聚合。
   - **同实例防护**：源库路径命中本机默认实例库且 `--endpoint` 为 loopback 时以退出码 2 拒绝——把实例导回自己时所有行撞签名，而服务端 `importUsageRows` 撞签会给旧行补写 `meta.imported=true`，把实时行标成「导入行」；确实是另一实例时 `--force` 越过。反向链式双计（源实例上游是目标实例）签名两边不同、服务端拦不住，文档明示不可用。
-  - 列集与服务端 `readUsageFromSqlite()`（9router 备份导入路径）一致，旧库缺列自动降级最小列集；读活库为快照复制（含 `-wal`/`-shm`），不必停源实例。合成库 + 本机真实库（2234 行）实测：导出转换/守卫 exit 2 / `--force` dry-run / 参数校验全通过。同日审查加固两处：无 scheme endpoint（`127.0.0.1:20127`）也能触发同实例防护（否则守卫失效开）；NULL 时间戳行导出侧跳过（服务端回填 `new Date()` 会破幂等）。根 `marketplace.json`（Discover 市场索引）同步 1.3.0 与新描述。09-16 补 `meta.gatewaySync` 标记：源库原生行凭此在目标侧参与健康度评分（数据口径例外，见上方「数据口径」条），链式客户端账本行不打标继续排除。
+  - 列集与服务端 `readUsageFromSqlite()`（9router 备份导入路径）一致，旧库缺列自动降级最小列集；读活库为快照复制（含 `-wal`/`-shm`），不必停源实例。合成库 + 本机真实库（2234 行）实测：导出转换/守卫 exit 2 / `--force` dry-run / 参数校验全通过。同日审查加固两处：无 scheme endpoint（`127.0.0.1:20127`）也能触发同实例防护（否则守卫失效开）；NULL 时间戳行导出侧跳过（服务端回填 `new Date()` 会破幂等）。根 `marketplace.json`（Discover 市场索引）同步 1.3.0 与新描述。
 
 - **10router-sync 插件 v1.2.0：新增小米 MiMo 桌面版（mimocode）用量导出 + ZCode 源改为「仅官方渠道」**。
   - **小米 MiMo 桌面版**（`--source mimo`，别名 `--source mimocode`）：MiMo 把每轮 assistant 消息的完整 token 计量记在 `~/.local/share/mimocode/mimocode.db` 的 `message` 表（JSON `data` 列：`input`/`output`/`reasoning`/`cache.read`/`cache.write`，附 `modelID`/`providerID`/`agent`/`mode`/`time`），比 OpenCode 的 session 级汇总粒度更细（逐轮消息级）。实现要点：WAL 活库先快照再读（复用 `snapshotDb()`）、按 `message.id` 去重、0-token 空转/中断轮次跳过、provider 落 `mimo-<providerID>`、cost 记 0、`meta` 带 messageId/sessionId/agent/mode；Windows 回退路径 `%APPDATA%\Xiaomi MiMo\mimocode.db`。本机实测导入 101 行（`mimo-mimo` 42 / `mimo-xiaomi` 59），重跑幂等。

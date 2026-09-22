@@ -29,6 +29,14 @@ export default {
     // MiniMax, DeepSeek, Hunyuan) takes reasoning via OpenAI-style reasoning_effort,
     // not its vendor-native thinking shape. Force the openai thinking format.
     thinkingFormat: "openai",
+    quirks: {
+      // Root-level tool `parameters` must be a concrete type:"object"; the
+      // upstream answers 400 {code:11129 "invalid function call parameters"}
+      // for a root anyOf/oneOf/allOf/$ref/type-array/missing-type. chatCore
+      // downgrades tool schemas for providers declaring this quirk. See
+      // translator/concerns/toolCall.js and issue #27.
+      sanitizeToolSchema: true,
+    },
     headers: {
       "User-Agent": "CLI/2.108.1 CodeBuddy/2.108.1",
       "X-Product": "SaaS",

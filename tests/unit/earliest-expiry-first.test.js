@@ -87,6 +87,66 @@ describe("extractEarliestPackageExpiry", () => {
     expect(result).toBeNull();
   });
 
+  it("keeps a DRAINED recurring window (MiMo weekly / CodeBuddy refill) — reset time is the badge", () => {
+    const now = Date.now();
+    const mockUsage = {
+      plan: "Xiaomi MiMo Desktop",
+      quotas: {
+        Weekly: {
+          used: 100,
+          total: 100,
+          remainingPercentage: 0,
+          resetAt: new Date(now + 2 * 86400000).toISOString(),
+          unlimited: false,
+          recurring: true,
+        },
+      },
+    };
+    const result = extractEarliestPackageExpiry(mockUsage);
+    expect(result).not.toBeNull();
+    expect(result.name).toBe("Weekly");
+  });
+
+  it("still skips a drained recurring window whose resetAt is in the past", () => {
+    const now = Date.now();
+    const mockUsage = {
+      quotas: {
+        Weekly: {
+          used: 100,
+          total: 100,
+          remainingPercentage: 0,
+          resetAt: new Date(now - 86400000).toISOString(),
+          recurring: true,
+        },
+      },
+    };
+    expect(extractEarliestPackageExpiry(mockUsage)).toBeNull();
+  });
+
+  it("drained recurring window competes on earliest-reset alongside live packs", () => {
+    const now = Date.now();
+    const mockUsage = {
+      quotas: {
+        Weekly: {
+          used: 100,
+          total: 100,
+          remainingPercentage: 0,
+          resetAt: new Date(now + 2 * 86400000).toISOString(),
+          recurring: true,
+        },
+        "Bonus Pack 1": {
+          used: 10,
+          total: 100,
+          remainingPercentage: 90,
+          resetAt: new Date(now + 10 * 86400000).toISOString(),
+          recurring: false,
+        },
+      },
+    };
+    const result = extractEarliestPackageExpiry(mockUsage);
+    expect(result.name).toBe("Weekly");
+  });
+
   it("handles null or malformed usage objects safely", () => {
     expect(extractEarliestPackageExpiry(null)).toBeNull();
     expect(extractEarliestPackageExpiry({})).toBeNull();

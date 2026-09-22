@@ -783,6 +783,10 @@ function xiaomiMimoPlatformCallbackUrl(status, message) {
 }
 
 const xiaomiMimoSessions = new Map();
+// MiMo Desktop keeps at most 8 pending login keys (its pending store is created
+// with cap:8). Mirror it: every entry holds an X25519 private key, so the 24 h
+// paste window must not become an unbounded key cache.
+const XIAOMI_MIMO_MAX_PENDING_SESSIONS = 8;
 
 export function registerXiaomiMimoSession({ state, privateKeyDer }) {
   if (!state || !privateKeyDer) return false;
@@ -792,6 +796,12 @@ export function registerXiaomiMimoSession({ state, privateKeyDer }) {
   const cutoff = Date.now() - XIAOMI_MIMO_CONFIG.pendingTtlMs;
   for (const [key, s] of xiaomiMimoSessions) {
     if (s.createdAt < cutoff) xiaomiMimoSessions.delete(key);
+  }
+  // Insertion order is chronological, so evicting from the head drops the oldest.
+  while (xiaomiMimoSessions.size >= XIAOMI_MIMO_MAX_PENDING_SESSIONS) {
+    const oldest = xiaomiMimoSessions.keys().next();
+    if (oldest.done) break;
+    xiaomiMimoSessions.delete(oldest.value);
   }
   xiaomiMimoSessions.set(state, {
     privateKeyDer,

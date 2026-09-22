@@ -6,13 +6,52 @@ import crypto from "node:crypto";
 import { DATA_DIR } from "@/lib/dataDir";
 import { getSettings } from "@/lib/localDb";
 
-const DEFAULT_PASSWORD = "123456";
+// There is deliberately no hardcoded fallback password. A fresh install used to
+// accept the literal "123456", and because the launcher binds 0.0.0.0 by
+// default that made every un-configured instance admin-open to the whole LAN in
+// one guess (issue #9: default listener + default password + plaintext
+// credentials). Instead:
+//   * `INITIAL_PASSWORD` is the only non-interactive bootstrap password (it is
+//     what Docker / fnOS installs set, and it is never "123456" by default);
+//   * with no password configured at all the dashboard is loopback-only, so the
+//     operator sitting at the machine can set one while remote clients are
+//     refused outright (see dashboardGuard.isAuthenticated).
+const BOOTSTRAP_PASSWORD_ENV = "INITIAL_PASSWORD";
+
+export function getBootstrapPassword() {
+  const fromEnv = process.env[BOOTSTRAP_PASSWORD_ENV];
+  return typeof fromEnv === "string" ? fromEnv.trim() : "";
+}
+
+// Does the dashboard have *any* way to authenticate a client? Password hash,
+// bootstrap env var or SSO. When false, "unauthenticated" means "nothing to ask
+// for", and the guard falls back to loopback trust so a password can be set.
+// The SSO checks mirror isOidcConfigured / isSamlConfigured but are inlined on
+// purpose: this helper runs inside the per-request proxy, and importing the SAML
+// module there would pull XML/crypto machinery into that graph for two key
+// reads.
+export function isDashboardAuthConfigured(settings) {
+  if (settings?.password) return true;
+  if (getBootstrapPassword()) return true;
+  const oidcReady =
+    String(settings?.oidcIssuerUrl || "").trim() &&
+    String(settings?.oidcClientId || "").trim() &&
+    String(settings?.oidcClientSecret || "").trim();
+  if (oidcReady) return true;
+  return Boolean(settings?.samlEntryPoint && settings?.samlCert);
+}
 
 // Session lifetime. The token's `exp` and the cookie's `maxAge` are both derived
 // from this one value on purpose: with no maxAge at all the browser treats
 // `auth_token` as a session cookie and drops it on browser close, so a user who
-// is still well inside their 24h token gets logged out by closing a window.
-const SESSION_MAX_AGE_SEC = 24 * 60 * 60;
+// is still well inside their token gets logged out by closing a window.
+//
+// Shortened from 24h (issue #9, item 8: a stolen cookie stayed usable for a
+// whole day). Two hours is only comfortable because the session SLIDES: see
+// renewDashboardAuthCookie — any authenticated page view re-issues the token
+// once it is past half its life, so an active operator is never interrupted
+// while a token that leaks is worthless within two hours.
+const SESSION_MAX_AGE_SEC = 2 * 60 * 60;
 
 // Placeholder values that ship in .env.example / old builds' source. A secret
 // the whole internet can guess is worse than no secret — fall back to the
@@ -97,12 +136,37 @@ export function clearDashboardAuthCookie(cookieStore) {
   cookieStore.delete("auth_token");
 }
 
+// Sliding session (issue #9, item 8). Call on an authenticated request: when the
+// presented token is past half its life, hand back a fresh one so an active user
+// never hits an expiry, while a token that leaked has a short window. Failures are
+// silent — the worst case is the old behaviour (the user re-authenticates).
+export async function renewDashboardAuthCookie(cookieStore, request, session) {
+  try {
+    const iat = typeof session?.iat === "number" ? session.iat * 1000 : 0;
+    if (!iat) return false;
+    const halfLifeMs = (SESSION_MAX_AGE_SEC * 1000) / 2;
+    if (Date.now() - iat < halfLifeMs) return false;
+    await setDashboardAuthCookie(cookieStore, request, {
+      ...(session?.oidcName ? { oidcName: session.oidcName } : {}),
+      ...(session?.oidcEmail ? { oidcEmail: session.oidcEmail } : {}),
+      ...(session?.samlName ? { samlName: session.samlName } : {}),
+      ...(session?.samlEmail ? { samlEmail: session.samlEmail } : {}),
+      ...(session?.oidc ? { oidc: true } : {}),
+      ...(session?.saml ? { saml: true } : {}),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Verify the current dashboard password (re-auth for sensitive actions).
 export async function verifyDashboardPassword(password) {
   if (typeof password !== "string" || !password) return false;
   const settings = await getSettings();
   const storedHash = settings?.password;
   if (storedHash) return bcrypt.compare(password, storedHash);
-  const initialPassword = process.env.INITIAL_PASSWORD || DEFAULT_PASSWORD;
-  return password === initialPassword;
+  const bootstrap = getBootstrapPassword();
+  if (!bootstrap) return false;
+  return password === bootstrap;
 }

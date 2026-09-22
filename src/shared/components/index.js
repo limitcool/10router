@@ -38,6 +38,7 @@ export { default as Tooltip } from "./Tooltip";
 export { default as ProviderInfoCard } from "./ProviderInfoCard";
 export { default as InviteCodeChip } from "./InviteCodeChip";
 export { default as CapacityBadges } from "./CapacityBadges";
+export { default as SecurityBanner } from "./SecurityBanner";
 
 // Layouts
 export * from "./layouts";

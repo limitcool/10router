@@ -1,9 +1,11 @@
 /**
  * Extract earliest-expiring available quota package from usage payload.
  *
- * Scans `usage.quotas` across all packages, skips exhausted packages
+ * Scans `usage.quotas` across all packages, skips exhausted one-shot packages
  * (used >= total or remaining <= 0) and summary aggregates ("Total Points"),
- * and returns the soonest future expiry timestamp/ISO string.
+ * and returns the soonest future expiry timestamp/ISO string. Exhausted
+ * RECURRING windows (recurring:true) are kept — their next reset time is the
+ * point of the badge even (especially) when the window is drained.
  *
  * @param {Object} usage
  * @returns {{ expiry: string, name: string, timestamp: number } | null}
@@ -30,17 +32,23 @@ export function extractEarliestPackageExpiry(usage) {
       continue;
     }
 
-    // Check if quota is exhausted
-    const used = Number(quota.used ?? 0);
-    const total = Number(quota.total ?? 0);
-    if (total > 0 && used >= total) {
-      continue;
-    }
-    if (quota.remaining !== undefined && quota.remaining <= 0) {
-      continue;
-    }
-    if (quota.remainingPercentage !== undefined && quota.remainingPercentage <= 0) {
-      continue;
+    // Check if quota is exhausted — but a RECURRING window (recurring:true,
+    // e.g. CodeBuddy refills / MiMo weekly) resets instead of dying: when
+    // it's drained, the upcoming reset time is exactly the information the
+    // badge exists to show. One-shot bonus packs keep being skipped.
+    const isRecurring = quota.recurring === true;
+    if (!isRecurring) {
+      const used = Number(quota.used ?? 0);
+      const total = Number(quota.total ?? 0);
+      if (total > 0 && used >= total) {
+        continue;
+      }
+      if (quota.remaining !== undefined && quota.remaining <= 0) {
+        continue;
+      }
+      if (quota.remainingPercentage !== undefined && quota.remainingPercentage <= 0) {
+        continue;
+      }
     }
 
     // Must have a valid future reset / expiry time

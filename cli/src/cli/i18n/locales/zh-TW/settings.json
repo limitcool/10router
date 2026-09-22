@@ -14,7 +14,7 @@
   "menus.settings.tunnelOff": "關閉隧道",
   "menus.settings.rtkToggle": "Token Saver (RTK): {state} → 點選切換",
   "menus.settings.headroomToggle": "Token Saver (Headroom): {state} → 點選切換",
-  "menus.settings.resetPassword": "🔑 重設密碼為預設值",
+  "menus.settings.resetPassword": "🔑 重設密碼",
   "menus.settings.authModeAlready": "🔓 重設驗證模式(目前已是密碼模式)",
   "menus.settings.authModeReset": "🔓 重設驗證模式為密碼(目前: {mode})",
   "menus.settings.resetAuthConfirm": "確定將驗證模式重設為密碼(停用 OIDC)嗎？",
@@ -29,7 +29,7 @@
   "menus.settings.tokenSaverDisabled": "Token Saver 已關閉",
   "menus.settings.headroomEnabledMsg": "Headroom 已開啟",
   "menus.settings.headroomDisabledMsg": "Headroom 已關閉",
-  "menus.settings.resetPwConfirm": "確定將儀表板密碼重設為預設值「{default}」嗎？",
-  "menus.settings.resetPwDone": "密碼已重設,預設值: {default}",
+  "menus.settings.resetPwConfirm": "確定要重設儀表板密碼嗎？將產生一組新的隨機密碼，並在此顯示一次。",
+  "menus.settings.resetPwDone": "密碼已重設。新密碼: {password} —— 只顯示這一次，請立即保存",
   "menus.settings.resetPwFailed": "重設密碼失敗: {error}"
 }

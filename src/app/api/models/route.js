@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getModelAliases, setModelAlias } from "@/models";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { getAllModelCaps } from "@/lib/modelCapsDb";
 import { AI_MODELS } from "@/shared/constants/config";
 import { getProviderAlias } from "@/shared/constants/providers";
 import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
@@ -10,6 +11,16 @@ export async function GET() {
   try {
     const modelAliases = await getModelAliases();
     const disabled = await getDisabledModels();
+    // User-pinned context window / max output overrides, keyed by every
+    // provider name spelling (id/alias/uiAlias). Fail-open: a broken caps
+    // read must never blank the whole model list.
+    let capsOverrides = {};
+    try {
+      const ov = await getAllModelCaps();
+      if (ov && typeof ov === "object") capsOverrides = ov;
+    } catch (e) {
+      console.log("Could not fetch model caps overrides:", e?.message);
+    }
 
     const models = AI_MODELS
       .filter((m) => {
@@ -22,18 +33,22 @@ export async function GET() {
         const providerAlias = getProviderAlias(m.provider) || m.provider;
         const routedModel = `${providerAlias}/${m.model}`;
         const c = getCapabilitiesForModel(m.provider, m.model);
+        const caps = {
+          vision: c.vision,
+          search: c.search,
+          reasoning: c.reasoning,
+          contextWindow: c.contextWindow,
+          maxOutput: c.maxOutput,
+        };
+        const ov = capsOverrides[m.provider]?.[m.model] || capsOverrides[providerAlias]?.[m.model];
+        if (ov?.contextWindow) caps.contextWindow = ov.contextWindow;
+        if (ov?.maxOutput) caps.maxOutput = ov.maxOutput;
         return {
           ...m,
           fullModel,
           routedModel,
           alias: modelAliases[fullModel] || m.model,
-          caps: {
-            vision: c.vision,
-            search: c.search,
-            reasoning: c.reasoning,
-            contextWindow: c.contextWindow,
-            maxOutput: c.maxOutput,
-          },
+          caps,
         };
       });
 

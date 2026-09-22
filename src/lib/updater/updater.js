@@ -13,7 +13,27 @@ const os = require("os");
 // script can't import that ESM config, so the fallback is duplicated — keep it in
 // step with UPDATER_CONFIG.npmPackageName; the bare `10router` on npm belongs to
 // an unrelated fork.
-const packageName = process.env.UPDATER_PKG_NAME || "@techysy/10router";
+const EXPECTED_PACKAGE = "@techysy/10router";
+const packageName = process.env.UPDATER_PKG_NAME || EXPECTED_PACKAGE;
+
+// Issue #9, item 6: this process is spawned by an authenticated route, but it runs
+// npm as the user and used to trust UPDATER_PKG_NAME outright — one environment
+// variable could point the "update" at an arbitrary npm package. Only our own
+// package is ever installed, and the target version is pinned rather than left to
+// whatever `latest` resolves to at install time (so the thing that lands is the
+// thing the dashboard told the user about).
+const packageNameMismatch = packageName !== EXPECTED_PACKAGE;
+const targetVersion = (process.env.UPDATER_TARGET_VERSION || "").trim();
+const targetVersionValid = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/.test(targetVersion);
+const prereleaseAllowed = process.env.UPDATER_ALLOW_PRERELEASE === "1";
+const refusal =
+  packageNameMismatch
+    ? `refusing to update: unexpected package name ${JSON.stringify(packageName)} (expected ${EXPECTED_PACKAGE})`
+    : !targetVersionValid
+      ? "refusing to update: no valid target version was provided (set UPDATER_TARGET_VERSION)"
+      : !prereleaseAllowed && targetVersion.includes("-")
+        ? `refusing to update: ${targetVersion} is not a release version (set UPDATER_ALLOW_PRERELEASE=1 to allow pre-releases)`
+        : null;
 const port = parseInt(process.env.UPDATER_PORT || "20129", 10);
 const tailLines = parseInt(process.env.UPDATER_TAIL_LINES || "8", 10);
 const maxRetries = parseInt(process.env.UPDATER_RETRIES || "3", 10);
@@ -40,6 +60,7 @@ const logFile = path.join(updateDir, "install.log");
 const state = {
   phase: "starting",
   packageName,
+  targetVersion: targetVersionValid ? targetVersion : null,
   startedAt: Date.now(),
   finishedAt: null,
   attempt: 0,
@@ -68,9 +89,15 @@ function setPhase(phase) {
   persistStatus();
 }
 
-// HTTP server exposing status (browser polls this while Next server is dead)
+// HTTP server exposing status on loopback (issue #9, item 6).
+//
+// It used to answer with `Access-Control-Allow-Origin: *`, which let any web page
+// the operator happened to visit read this endpoint (package name, version,
+// phase, log tail) — a free fingerprint of the install. Nothing needs the wide
+// header any more: the dashboard's legacy status poll was replaced by the
+// "copy install command + shutdown" flow, so the only readers left are the
+// updater's own status.json and a human curling 127.0.0.1.
 const server = http.createServer((req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "no-store");
   if (req.url === "/update/status" || req.url === "/") {
     res.setHeader("Content-Type", "application/json");
@@ -132,14 +159,30 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// What actually gets installed: our package at the pinned version.
+const installSpec = `${packageName}@${targetVersion}`;
+
 function runInstall() {
+  if (refusal) {
+    // Refuse before touching npm. The dashboard surfaces state.error, so the
+    // operator sees why nothing happened instead of a silent no-op.
+    pushLog(`[updater] ${refusal}`);
+    state.phase = "refused";
+    state.error = refusal;
+    state.done = true;
+    state.success = false;
+    state.finishedAt = Date.now();
+    persistStatus();
+    return;
+  }
+
   state.attempt += 1;
   setPhase("installing");
-  pushLog(`[updater] attempt ${state.attempt}/${maxRetries} — npm i -g ${packageName} --prefer-online`);
+  pushLog(`[updater] attempt ${state.attempt}/${maxRetries} — npm i -g ${installSpec} --prefer-online`);
 
   const isWin = process.platform === "win32";
   const cmd = isWin ? "npm.cmd" : "npm";
-  const args = ["i", "-g", packageName, "--prefer-online"];
+  const args = ["i", "-g", installSpec, "--prefer-online"];
 
   const child = spawn(cmd, args, {
     stdio: ["ignore", "pipe", "pipe"],
@@ -164,6 +207,17 @@ function runInstall() {
   child.on("close", (code) => {
     pushLog(`[updater] npm exited with code ${code}`);
     if (code === 0) {
+      const installed = readInstalledVersion();
+      if (installed && installed !== targetVersion) {
+        // npm succeeded but a different version is on disk: never report success
+        // for something we cannot name. This is the "installed 1.2.0, reported
+        // 1.2.1" class of surprise, now loud.
+        const message = `installed ${installed}, expected ${targetVersion}`;
+        pushLog(`[updater] ${message}`);
+        finalize(false, code, message);
+        return;
+      }
+      pushLog(`[updater] verified installed version: ${installed || targetVersion}`);
       finalize(true, code, null);
       return;
     }
@@ -174,6 +228,34 @@ function runInstall() {
     }
     finalize(false, code, `Install failed after ${maxRetries} attempts`);
   });
+}
+
+// Read back what npm actually put on disk. Best effort: an unreadable answer
+// (unusual global prefix, npm missing) is not treated as a mismatch — the
+// version is logged as unknown rather than failing an install that worked.
+function readInstalledVersion() {
+  try {
+    const { execFileSync } = require("child_process");
+    const isWin = process.platform === "win32";
+    const out = execFileSync(isWin ? "npm.cmd" : "npm", ["ls", "-g", packageName, "--json", "--depth=0"], {
+      encoding: "utf8",
+      windowsHide: true,
+      shell: isWin,
+      timeout: 20000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed = JSON.parse(out);
+    return parsed?.dependencies?.[packageName]?.version || null;
+  } catch (e) {
+    // npm ls exits non-zero when the tree is odd; its stdout may still parse.
+    const stdout = e && typeof e.stdout === "string" ? e.stdout : "";
+    try {
+      const parsed = JSON.parse(stdout);
+      return parsed?.dependencies?.[packageName]?.version || null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 function openBrowser(url) {

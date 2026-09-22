@@ -5,6 +5,10 @@ import { encodeDataUri } from "../concerns/image.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import { collapseTextParts } from "../concerns/message.js";
 
+// Anthropic and OpenAI both cap stop sequences at 4; a client that sends more
+// would 400 upstream, so trim instead of forwarding a request the provider rejects.
+const MAX_STOP_SEQUENCES = 4;
+
 function stripAnthropicBillingHeader(text) {
   if (typeof text !== "string") return "";
   return text.replace(/^x-anthropic-billing-header:[^\n]*(?:\r?\n)?/i, "");
@@ -21,6 +25,22 @@ export function claudeToOpenAIRequest(model, body, stream) {
   // Max tokens
   if (body.max_tokens) {
     result.max_tokens = adjustMaxTokens(body);
+  }
+
+  // Stop sequences — Anthropic `stop_sequences` is OpenAI `stop` (both cap at 4).
+  // Dropping it is NOT cosmetic (issue #18): Claude Code's auto-mode classifier
+  // sends stop_sequences:["</block>"] together with max_tokens:64 and relies on
+  // the model halting the instant it emits the verdict tag. Without the stop the
+  // model keeps generating past the tag, the 64-token budget truncates the turn,
+  // and the client's xml_2stage parser rejects it — its severity parser demands
+  // stop_reason ∈ {stop_sequence, end_turn}, so a `max_tokens` truncation parses
+  // as null → "classifier unavailable". Affects every claude→openai request (any
+  // client-supplied stop sequence was silently ignored), not just the classifier.
+  if (body.stop_sequences !== undefined) {
+    const stops = (Array.isArray(body.stop_sequences) ? body.stop_sequences : [body.stop_sequences])
+      .filter((s) => typeof s === "string" && s.length > 0)
+      .slice(0, MAX_STOP_SEQUENCES);
+    if (stops.length > 0) result.stop = stops;
   }
 
   // Temperature

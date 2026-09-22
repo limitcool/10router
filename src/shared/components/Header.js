@@ -169,6 +169,13 @@ const getPageInfo = (pathname) => {
       icon: "monitor",
       breadcrumbs: [],
     };
+  if (pathname.includes("/experimental"))
+    return {
+      title: "Experimental",
+      description: "Beta toggles for provider transfer and daily credit check-ins",
+      icon: "science",
+      breadcrumbs: [],
+    };
   if (pathname === "/dashboard")
     return {
       title: "Endpoint",

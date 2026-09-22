@@ -57,11 +57,14 @@ export async function PATCH(request) {
           return NextResponse.json({ error: "Invalid current password" }, { status: 401 });
         }
       } else {
-        // First time setting password, no current password needed
-        // Allow empty currentPassword or default "123456"
-        if (body.currentPassword && body.currentPassword !== "123456") {
-           return NextResponse.json({ error: "Invalid current password" }, { status: 401 });
-        }
+        // First time setting a password: there is no stored hash to compare
+        // against. Reaching this branch already required passing the guard,
+        // which admits only authenticated clients — or, when nothing is
+        // configured at all, the loopback operator (see
+        // dashboardGuard.isAuthenticated). No literal fallback belongs here: the
+        // old code also accepted the hardcoded "123456", which is exactly what
+        // let a remote caller on a fresh 0.0.0.0 install take the dashboard over
+        // (issue #9).
       }
 
       const salt = await bcrypt.genSalt(10);

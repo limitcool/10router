@@ -16,6 +16,19 @@ import { translate } from "@/i18n/runtime";
 
 const RESET_TEMPLATE_KEY = "Individual quota reached. Resets at {time} (in {duration}).";
 
+// Plan/subscription quota (MiMo's weekly allowance and friends) is a DIFFERENT
+// failure from Google's per-minute cap: there is no countdown in the payload and
+// no upgrade path we can speak to, so it gets its own template. Without this
+// branch the raw JSON blob (`[403]: {"error":{"message":"本周用量已满…` renders in
+// the row and gets truncated mid-sentence by the max-width span.
+const SUBSCRIPTION_TEMPLATE_KEY = "Subscription quota used up. Please wait for the quota reset.";
+
+// MiMo: "code":"subscription_quota_exhausted","biz_code":30011 (HTTP 403).
+// Deliberately NARROW: Google's 429 payload also carries a `QUOTA_EXHAUSTED`
+// reason, so a looser pattern would steal that case and drop its reset clock.
+// The Chinese phrases cover deployments that only send a message.
+const SUBSCRIPTION_QUOTA_RE = /subscription_quota_exhausted|本周用量已满|本周额度已用完/i;
+
 function fmtUnit(key, n) {
   // Falls back to the raw key ("{n}h" -> "3h") when the dictionary is missing.
   return translate(key).replace("{n}", String(n));
@@ -35,12 +48,24 @@ export function parseQuotaDurationParts(str) {
   };
 }
 
-/** Format parsed parts into a localized duration like "1小时27分36秒" / "1h 27m 36s". */
+/**
+ * Format parsed parts into a localized duration like "1小时27分36秒" / "1h 27m 36s".
+ *
+ * A wait measured in days must NOT collapse to a single unit: "41小时" (and the
+ * expiry badge's "1d") both hide how much of the day is left, so >=24h renders as
+ * "1d 17h". Below a day the existing h/m/s rendering is kept intact.
+ */
 export function formatQuotaDuration(parts) {
   if (!parts) return "";
   let { h, m, s } = parts;
   if (s >= 60) { m += Math.floor(s / 60); s %= 60; }
   if (m >= 60) { h += Math.floor(m / 60); m %= 60; }
+  if (h >= 24) {
+    const d = Math.floor(h / 24);
+    const remHours = h % 24;
+    // Minutes/seconds are noise once the wait is measured in days.
+    return remHours > 0 ? `${fmtUnit("{n}d", d)} ${fmtUnit("{n}h", remHours)}` : fmtUnit("{n}d", d);
+  }
   const segments = [];
   if (h > 0) segments.push(fmtUnit("{n}h", h));
   if (m > 0) segments.push(fmtUnit("{n}m", m));
@@ -85,6 +110,13 @@ export function translateQuotaError(errorText) {
 
   const direct = translate(errorText);
   if (direct && direct !== errorText) return direct;
+
+  // Plan/subscription quota exhausted (no reset fields in the payload).
+  // Must stay NARROWER than the Google pattern below so the two never overlap:
+  // Google owns the countdown, this one only owns "wait for the reset".
+  if (SUBSCRIPTION_QUOTA_RE.test(errorText)) {
+    return translate(SUBSCRIPTION_TEMPLATE_KEY);
+  }
 
   // Google-style per-account quota exhausted (HTTP 429 RESOURCE_EXHAUSTED).
   if (/Individual quota reached|QUOTA_EXHAUSTED|RESOURCE_EXHAUSTED/i.test(errorText)) {

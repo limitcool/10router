@@ -14,7 +14,7 @@
   "menus.settings.tunnelOff": "Tunnel OFF",
   "menus.settings.rtkToggle": "Token Saver (RTK): {state} → toggle",
   "menus.settings.headroomToggle": "Token Saver (Headroom): {state} → toggle",
-  "menus.settings.resetPassword": "🔑 Reset Password to Default",
+  "menus.settings.resetPassword": "🔑 Reset Password",
   "menus.settings.authModeAlready": "🔓 Reset Auth Mode (already password)",
   "menus.settings.authModeReset": "🔓 Reset Auth Mode to Password (current: {mode})",
   "menus.settings.resetAuthConfirm": "Reset auth mode to PASSWORD (disable OIDC)?",
@@ -29,7 +29,7 @@
   "menus.settings.tokenSaverDisabled": "Token Saver disabled",
   "menus.settings.headroomEnabledMsg": "Headroom enabled",
   "menus.settings.headroomDisabledMsg": "Headroom disabled",
-  "menus.settings.resetPwConfirm": "Reset dashboard password to default \"{default}\"?",
-  "menus.settings.resetPwDone": "Password reset. Default: {default}",
+  "menus.settings.resetPwConfirm": "Reset the dashboard password? A new random password will be generated and shown once.",
+  "menus.settings.resetPwDone": "Password reset. New password: {password} — shown only once, save it now",
   "menus.settings.resetPwFailed": "Failed to reset password: {error}"
 }

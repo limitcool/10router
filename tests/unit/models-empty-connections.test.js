@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   getCustomModels: vi.fn(),
   getModelAliases: vi.fn(),
   getDisabledModels: vi.fn(),
+  getSettings: vi.fn(),
+  getAllModelCaps: vi.fn(),
 }));
 
 vi.mock("@/lib/localDb", () => ({
@@ -15,6 +17,11 @@ vi.mock("@/lib/localDb", () => ({
   getCombos: mocks.getCombos,
   getCustomModels: mocks.getCustomModels,
   getModelAliases: mocks.getModelAliases,
+  getSettings: mocks.getSettings,
+}));
+
+vi.mock("@/lib/modelCapsDb", () => ({
+  getAllModelCaps: mocks.getAllModelCaps,
 }));
 
 vi.mock("@/lib/disabledModelsDb", () => ({
@@ -27,6 +34,17 @@ const { buildModelsList } = await import("../../src/app/api/v1/models/route.js")
 
 const LLM_KIND = "llm";
 
+// First-seen provider prefix sequence of the emitted model ids — the shape
+// the card-order test asserts on.
+function providerPrefixSeq(models) {
+  const seq = [];
+  for (const m of models) {
+    const p = m.id.includes("/") ? m.id.split("/")[0] : m.id;
+    if (!seq.includes(p)) seq.push(p);
+  }
+  return seq;
+}
+
 describe("buildModelsList — empty-connection behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -35,6 +53,7 @@ describe("buildModelsList — empty-connection behavior", () => {
     mocks.getCustomModels.mockResolvedValue([]);
     mocks.getModelAliases.mockResolvedValue({});
     mocks.getDisabledModels.mockResolvedValue({});
+    mocks.getAllModelCaps.mockResolvedValue({});
   });
 
   it("does NOT dump the full built-in catalog when the DB is healthy but has zero provider connections", async () => {
@@ -237,5 +256,151 @@ describe("buildModelsList — empty-connection behavior", () => {
     const ids = models.map((m) => m.id);
 
     expect(ids).not.toContain("oc/mimo-v2.5-free");
+  });
+});
+
+describe("buildModelsList — provider order follows settings.providerCardOrder", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getProviderNodes.mockResolvedValue([]);
+    mocks.getCombos.mockResolvedValue([]);
+    mocks.getCustomModels.mockResolvedValue([]);
+    mocks.getModelAliases.mockResolvedValue({});
+    mocks.getDisabledModels.mockResolvedValue({});
+    mocks.getSettings.mockResolvedValue({});
+    mocks.getAllModelCaps.mockResolvedValue({});
+    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+  });
+
+  const twoConns = () => [
+    { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    { id: "c2", provider: "codebuddy-intl", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["glm-5.3"] } },
+  ];
+
+  it("honours the manual card order over DB insertion order", async () => {
+    mocks.getProviderConnections.mockResolvedValue(twoConns());
+    mocks.getSettings.mockResolvedValue({ providerCardOrder: ["codebuddy-intl", "codebuddy-cn"] });
+    // User dragged cbai above cbcn → /v1/models must match.
+    expect(providerPrefixSeq(await buildModelsList([LLM_KIND]))).toEqual(["cbai", "cbcn"]);
+  });
+
+  it("keeps the un-dragged providers in priority/name order after the ordered ones", async () => {
+    mocks.getProviderConnections.mockResolvedValue(twoConns());
+    mocks.getSettings.mockResolvedValue({ providerCardOrder: ["codebuddy-cn"] });
+    expect(providerPrefixSeq(await buildModelsList([LLM_KIND]))).toEqual(["cbcn", "cbai"]);
+  });
+
+  it("interleaves noAuth orphan custom models with connected providers by card order", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    ]);
+    mocks.getCustomModels.mockResolvedValue([
+      { providerAlias: "oc", id: "big-pickle", type: "llm", enabled: true },
+    ]);
+    mocks.getSettings.mockResolvedValue({ providerCardOrder: ["opencode", "codebuddy-cn"] });
+    // Mirrors the dashboard, where a visible noAuth provider (opencode) shares
+    // the top rank with connected providers: dragging it above codebuddy-cn
+    // must reorder /v1/models too, not just the cards.
+    expect(providerPrefixSeq(await buildModelsList([LLM_KIND]))).toEqual(["oc", "cbcn"]);
+  });
+
+  it("interleaves noAuth orphan custom models with connected providers by card order (reverse)", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    ]);
+    mocks.getCustomModels.mockResolvedValue([
+      { providerAlias: "oc", id: "big-pickle", type: "llm", enabled: true },
+    ]);
+    mocks.getSettings.mockResolvedValue({ providerCardOrder: ["codebuddy-cn", "opencode"] });
+    // Drag the other way and the list flips — the orphan is no longer pinned
+    // to the tail just because it lacks a connection.
+    expect(providerPrefixSeq(await buildModelsList([LLM_KIND]))).toEqual(["cbcn", "oc"]);
+  });
+
+  it("falls back to registry priority when no card order was saved", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    ]);
+    mocks.getCustomModels.mockResolvedValue([
+      { providerAlias: "oc", id: "big-pickle", type: "llm", enabled: true },
+    ]);
+    // Pristine instance (no manual order yet): same fallback the dashboard
+    // comparator uses — registry priority, where opencode (40) outranks
+    // codebuddy-cn (90), so the orphan legitimately leads.
+    mocks.getSettings.mockResolvedValue({});
+    expect(providerPrefixSeq(await buildModelsList([LLM_KIND]))).toEqual(["oc", "cbcn"]);
+  });
+
+  it("empty cardOrder leaves the list unchanged in priority order (regression)", async () => {
+    mocks.getProviderConnections.mockResolvedValue(twoConns());
+    mocks.getSettings.mockResolvedValue({});
+    const seq = providerPrefixSeq(await buildModelsList([LLM_KIND]));
+    // cbai & cbcn both present; no card order → comparator tie-breaks by priority
+    // (cbcn=90 before cbai=intl default 200). Exact ids asserted in the next run.
+    expect(new Set(seq)).toEqual(new Set(["cbcn", "cbai"]));
+  });
+
+  it("pinned modelCaps override wins over the catalog in context_length", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    ]);
+    mocks.getAllModelCaps.mockResolvedValue({
+      cbcn: { "hy3": { contextWindow: 123456, maxOutput: 7890 } },
+    });
+    const models = await buildModelsList([LLM_KIND]);
+    const hy3 = models.find((m) => m.id === "cbcn/hy3");
+    expect(hy3.context_length).toBe(123456);
+    expect(hy3.max_completion_tokens).toBe(7890);
+    // Nested capabilities block must stay in sync with the snake_case fields.
+    expect(hy3.capabilities?.contextWindow).toBe(123456);
+    expect(hy3.capabilities?.maxOutput).toBe(7890);
+  });
+
+  it("surfaces a custom model's stored window (beats the 200k catalog default)", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    ]);
+    mocks.getCustomModels.mockResolvedValue([
+      { providerAlias: "cbcn", id: "my-model", type: "llm", enabled: true, contextWindow: 99999, maxOutput: 64000 },
+    ]);
+    const models = await buildModelsList([LLM_KIND]);
+    const mine = models.find((m) => m.id === "cbcn/my-model");
+    expect(mine.context_length).toBe(99999);
+    expect(mine.max_completion_tokens).toBe(64000);
+  });
+
+  it("keeps a pinned override ahead of the custom model's own stored window", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    ]);
+    mocks.getCustomModels.mockResolvedValue([
+      { providerAlias: "cbcn", id: "my-model", type: "llm", enabled: true, contextWindow: 99999 },
+    ]);
+    mocks.getAllModelCaps.mockResolvedValue({
+      cbcn: { "my-model": { contextWindow: 300000 } },
+    });
+    const models = await buildModelsList([LLM_KIND]);
+    expect(models.find((m) => m.id === "cbcn/my-model").context_length).toBe(300000);
+  });
+
+  it("gives orphan custom models their stored window too", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    ]);
+    mocks.getCustomModels.mockResolvedValue([
+      { providerAlias: "oc", id: "big-pickle", type: "llm", enabled: true, contextWindow: 500000 },
+    ]);
+    const models = await buildModelsList([LLM_KIND]);
+    const orphan = models.find((m) => m.id === "oc/big-pickle");
+    expect(orphan.context_length).toBe(500000);
+  });
+
+  it("ignores a broken caps read instead of failing the whole list", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "c1", provider: "codebuddy-cn", authType: "oauth", isActive: true, providerSpecificData: { enabledModels: ["hy3"] } },
+    ]);
+    mocks.getAllModelCaps.mockRejectedValue(new Error("db gone"));
+    const models = await buildModelsList([LLM_KIND]);
+    expect(models.some((m) => m.id === "cbcn/hy3")).toBe(true);
   });
 });

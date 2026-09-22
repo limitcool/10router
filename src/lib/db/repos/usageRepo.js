@@ -2,12 +2,7 @@ import { EventEmitter } from "events";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
-
-function maskApiKey(key) {
-  if (!key || typeof key !== "string") return null;
-  if (key.length <= 8) return key.charAt(0) + "***";
-  return key.slice(0, 8) + "***";
-}
+import { maskApiKey, hashApiKey } from "../crypto/apiKeyIdentity.js";
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
 const RING_CAP = 50;
@@ -89,8 +84,24 @@ function aggregateEntryToDay(day, entry) {
   }
 
   const apiKeyVal = entry.apiKey && typeof entry.apiKey === "string" ? entry.apiKey : "local-no-key";
-  const akModelKey = `${apiKeyVal}|${entry.model}|${entry.provider || "unknown"}`;
-  addToCounter(day.byApiKey, akModelKey, { ...vals, meta: { rawModel: entry.model, provider: entry.provider, apiKey: entry.apiKey || null } });
+  // The counter KEY used to embed the raw key, and the aggregate it builds is
+  // persisted in usageDaily — so the key had to change too, not just the meta.
+  // Nothing outside this module reads these keys (the UI reads the assembled
+  // `stats.byApiKey`, whose entries carry keyName/apiKeyMasked).
+  const apiKeyHash = hashApiKey(entry.apiKey);
+  const akModelKey = `${apiKeyHash || "local-no-key"}|${entry.model}|${entry.provider || "unknown"}`;
+  // The per-day aggregate ends up in the database too (usageDaily.data), so it
+  // carries the same identity as a row: a digest for grouping and lookup, a
+  // masked value for display — never the key itself.
+  addToCounter(day.byApiKey, akModelKey, {
+    ...vals,
+    meta: {
+      rawModel: entry.model,
+      provider: entry.provider,
+      apiKeyHash,
+      apiKeyMasked: maskApiKey(entry.apiKey),
+    },
+  });
 
   const endpoint = entry.endpoint || "Unknown";
   const epKey = `${endpoint}|${entry.model}|${entry.provider || "unknown"}`;
@@ -259,13 +270,13 @@ export async function saveRequestUsage(entry) {
            AND COALESCE(provider, '') = COALESCE(?, '')
            AND COALESCE(model, '') = COALESCE(?, '')
            AND COALESCE(connectionId, '') = COALESCE(?, '')
-           AND COALESCE(apiKey, '') = COALESCE(?, '')
+           AND COALESCE(apiKeyHash, '') = COALESCE(?, '')
            AND promptTokens = ?
            AND completionTokens = ?
          ORDER BY id DESC LIMIT 1`,
         [
           entry.timestamp, entry.provider || null, entry.model || null,
-          entry.connectionId || null, entry.apiKey || null,
+          entry.connectionId || null, hashApiKey(entry.apiKey),
           promptTokens, completionTokens,
         ]
       );
@@ -288,10 +299,10 @@ export async function saveRequestUsage(entry) {
       }
 
       db.run(
-        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, apiKeyHash, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.timestamp, entry.provider || null, entry.model || null,
-          entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
+          entry.connectionId || null, maskApiKey(entry.apiKey), hashApiKey(entry.apiKey), entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
           // meta carries caller extras (executor latency observation, etc.)
           // plus the dedup usageKey. The usageKey previously DISCARDED any
@@ -381,7 +392,9 @@ export async function getUsageStats(period = "all") {
   let allApiKeys = [];
   try { allApiKeys = await getApiKeys(); } catch {}
   const apiKeyMap = {};
-  for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
+  // Keyed by digest: the log no longer stores the key itself, so the name lookup
+  // goes through the same one-way function (issue #9, item 5).
+  for (const k of allApiKeys) apiKeyMap[hashApiKey(k.key)] = { name: k.name, id: k.id, createdAt: k.createdAt };
 
   // recentRequests from live history (last 100 entries enough for 20 deduped)
   const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
@@ -519,10 +532,14 @@ export async function getUsageStats(period = "all") {
         const rawModel = ak.rawModel || "";
         const provider = ak.provider || "";
         const providerDisplayName = providerNodeNameMap[provider] || provider;
-        const apiKeyVal = ak.apiKey;
-        const keyInfo = apiKeyVal ? apiKeyMap[apiKeyVal] : null;
-        const keyName = keyInfo?.name || (apiKeyVal ? apiKeyVal.slice(0, 8) + "..." : "Local (No API Key)");
-        const apiKeyMasked = maskApiKey(apiKeyVal);
+        // Aggregates written by an older build still carry the raw key in
+        // `meta.apiKey`; derive the identity from it so pre-upgrade days keep
+        // their key names instead of collapsing into "Local (No API Key)".
+        const legacyRaw = ak.apiKey;
+        const apiKeyHash = ak.apiKeyHash || hashApiKey(legacyRaw);
+        const apiKeyMasked = ak.apiKeyMasked || maskApiKey(legacyRaw);
+        const keyInfo = apiKeyHash ? apiKeyMap[apiKeyHash] : null;
+        const keyName = keyInfo?.name || (apiKeyMasked ? apiKeyMasked.slice(0, 8) + "..." : "Local (No API Key)");
         const apiKeyKey = apiKeyMasked || "local-no-key";
         if (!stats.byApiKey[akKey]) {
           stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, rawModel, provider: providerDisplayName, apiKeyMasked, keyName, apiKeyKey, lastUsed: dateKey };
@@ -555,7 +572,7 @@ export async function getUsageStats(period = "all") {
     // Overlay precise lastUsed timestamps from history
     const overlayCutoff = maxDays ? Date.now() - maxDays * 86400000 : 0;
     const histRows = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKey, apiKeyHash, endpoint FROM usageHistory WHERE timestamp >= ?`,
       [new Date(overlayCutoff).toISOString()]
     );
     for (const e of histRows) {
@@ -589,7 +606,7 @@ export async function getUsageStats(period = "all") {
       cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
     }
     const filtered = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKey, apiKeyHash, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
       [cutoff]
     );
 
@@ -639,9 +656,9 @@ export async function getUsageStats(period = "all") {
       }
 
       if (r.apiKey && typeof r.apiKey === "string") {
-        const keyInfo = apiKeyMap[r.apiKey];
-        const keyName = keyInfo?.name || r.apiKey.slice(0, 8) + "...";
+        const keyInfo = r.apiKeyHash ? apiKeyMap[r.apiKeyHash] : null;
         const apiKeyMasked = maskApiKey(r.apiKey);
+        const keyName = keyInfo?.name || (apiKeyMasked ? apiKeyMasked.slice(0, 8) + "..." : "Local (No API Key)");
         const akKey = `${apiKeyMasked}|${r.model}|${r.provider || "unknown"}`;
         if (!stats.byApiKey[akKey]) {
           stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKeyMasked, keyName, apiKeyKey: apiKeyMasked, lastUsed: r.timestamp };
@@ -700,6 +717,17 @@ const CODENAME_FAMILIES = [
   [/^qwq(?:-.*)?$/, "qwen"],
 ];
 
+// Brand consolidation: one vendor ships several product-line prefixes that
+// should NOT split into separate legend bars. After the first-segment strip,
+// a derived family in the key folds into the mapped family. StepFun exposes
+// `step-*` (LLM/vision/image) alongside `stepaudio-*` (TTS/ASR) — same brand,
+// so they aggregate to one "step" family rather than showing "step" + "stepaudio".
+// Brand consolidation: different product-line prefixes of one brand fold into
+// one family so the Model Type chart shows a single bar per vendor rather than
+// splitting StepFun's stack into "step" + "stepaudio". Keys are post-strip
+// first segments; add entries here as other brand-prefixed lines surface.
+const BRAND_FAMILIES = { stepaudio: "step" };
+
 export function modelFamilyName(model) {
   const raw = String(model || "unknown");
   const noPrefix = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
@@ -720,7 +748,8 @@ export function modelFamilyName(model) {
   // form already gets (gpt-6-astra → gpt). Guard keeps a purely numeric first
   // segment intact instead of collapsing it to "".
   const first = segs[0] || "other";
-  return first.replace(/[0-9]+(?:\.[0-9]+)*$/, "") || first;
+  const stripped = first.replace(/[0-9]+(?:\.[0-9]+)*$/, "") || first;
+  return BRAND_FAMILIES[stripped] || stripped;
 }
 
 // Keep the top families by period total, fold the rest into "other" — the
@@ -1286,17 +1315,20 @@ export async function importUsageRows(rows) {
       const ts = entry.timestamp || new Date().toISOString();
 
       // Dedup: same signature as live writes.
+      // Imported backups may already carry a masked value (this build's export)
+      // or a raw one (older exports); the identity is derived the same way either
+      // way, so dedup stays consistent within the file being imported.
       const existing = db.get(
         `SELECT id, meta FROM usageHistory
          WHERE timestamp = ?
            AND COALESCE(provider, '') = COALESCE(?, '')
            AND COALESCE(model, '') = COALESCE(?, '')
            AND COALESCE(connectionId, '') = COALESCE(?, '')
-           AND COALESCE(apiKey, '') = COALESCE(?, '')
+           AND COALESCE(apiKeyHash, '') = COALESCE(?, '')
            AND promptTokens = ?
            AND completionTokens = ?
          ORDER BY id DESC LIMIT 1`,
-        [ts, entry.provider || null, entry.model || null, entry.connectionId || null, entry.apiKey || null, promptTokens, completionTokens]
+        [ts, entry.provider || null, entry.model || null, entry.connectionId || null, hashApiKey(entry.apiKey), promptTokens, completionTokens]
       );
       if (existing) {
         // A dedup hit during an import proves the row itself came from an
@@ -1311,10 +1343,10 @@ export async function importUsageRows(rows) {
       }
 
       db.run(
-        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, apiKeyHash, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           ts, entry.provider || null, entry.model || null,
-          entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
+          entry.connectionId || null, maskApiKey(entry.apiKey), hashApiKey(entry.apiKey), entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
           stringifyJson(tokens), stringifyJson({ imported: true, ...(entry.meta || {}) }),
         ]
