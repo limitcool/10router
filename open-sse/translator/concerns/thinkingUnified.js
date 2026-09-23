@@ -107,6 +107,16 @@ export const captureThinking = extractThinking;
 
 // Resolve thinking format: provider override > capability > derive(targetFormat).
 function resolveFormat(targetFormat, model, provider) {
+  // Unregistered provider + Responses target ⇒ the request is passed straight to a
+  // user-supplied `openai-compatible-responses-*` node, so the wire format is the
+  // native Responses API and the thinking knob is `reasoning.effort`. Registered
+  // providers are excluded: they either declare thinkingFormat below or must keep
+  // the historical chat-style `reasoning_effort` (codex/grok-cli/opencode-go/...).
+  const isResponsesTarget = targetFormat === "openai-responses" || targetFormat === "openai-response";
+  if (isResponsesTarget && provider && !PROVIDERS[provider]) {
+    const caps = getCapabilitiesForModel(provider, model);
+    if (caps.reasoning) return "openai-responses";
+  }
   const providerFmt = provider ? PROVIDERS[provider]?.thinkingFormat : null;
   if (providerFmt) return providerFmt;
   const caps = getCapabilitiesForModel(provider, model);
@@ -233,6 +243,23 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels) {
       if (none && canDisable) { body.reasoning_effort = "none"; break; }
       const level = toLevel(eff);
       if (level) body.reasoning_effort = normalizeOpenAILevel(level, supportedLevels);
+      break;
+    }
+    case "openai-responses": {
+      // Native OpenAI **Responses** API (and shims that implement it strictly, e.g.
+      // cpa.meetsy.top). This endpoint has no top-level `reasoning_effort`; the
+      // parameter lives at `reasoning.effort`, and an unknown `reasoning_effort`
+      // key is rejected outright with `Unsupported parameter: reasoning_effort`
+      // (400, FastAPI-style detail). Only reachable via resolveFormat's
+      // unregistered-provider branch — registered providers declare their own
+      // thinkingFormat or keep the historical chat-style mapping.
+      if (none && canDisable) { body.reasoning = { effort: "none" }; break; }
+      const level = toLevel(eff);
+      if (level) {
+        const effort = normalizeOpenAILevel(level, supportedLevels);
+        const prev = body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning) ? body.reasoning : {};
+        body.reasoning = { ...prev, effort };
+      }
       break;
     }
     case "claude-adaptive": {
