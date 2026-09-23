@@ -1,5 +1,5 @@
 // Re-export from open-sse with localDb integration
-import { getModelAliases, getComboByName, getProviderNodes } from "@/lib/localDb";
+import { getModelAliases, getComboByName, getProviderNodes, getCustomModels } from "@/lib/localDb";
 import { parseModel as parseModelCore, resolveModelAliasFromMap, getModelInfoCore } from "open-sse/services/model.js";
 import REGISTRY from "open-sse/providers/registry/index.js";
 
@@ -75,7 +75,48 @@ export async function getModelInfo(modelStr) {
     return { provider: null, model: parsed.model };
   }
 
+  // Unprefixed custom-model fallback.
+  //
+  // A bare id like `gpt-6-astra` has no provider hint, so prefix inference would
+  // send it to the built-in `openai` provider and fail with
+  // "No active credentials for provider: openai". When the exact id is
+  // registered as a custom model on user-defined node(s), that registration IS
+  // the routing intent.
+  //
+  // Only an unambiguous match is honoured: if the same bare id is registered on
+  // two or more nodes we cannot know which one was meant, so we fall through to
+  // the previous behaviour rather than guessing and silently serving the wrong
+  // upstream. (Use the explicit `<prefix>/<model>` form to disambiguate.)
+  const customMatch = await resolveUniqueCustomModel(parsed.model);
+  if (customMatch) return customMatch;
+
   return getModelInfoCore(modelStr, getModelAliases);
+}
+
+/**
+ * Find the provider node that uniquely owns an unprefixed custom model id.
+ * @returns {Promise<{provider: string, model: string}|null>}
+ */
+async function resolveUniqueCustomModel(modelId) {
+  if (!modelId) return null;
+
+  let customs;
+  try {
+    customs = (await getCustomModels()) || [];
+  } catch {
+    // Never let a DB hiccup turn a routing decision into a hard failure.
+    return null;
+  }
+
+  const owners = new Set();
+  for (const m of customs) {
+    if (m?.type !== undefined && m.type !== "llm") continue;
+    if (m?.id !== modelId) continue;
+    if (m?.providerAlias) owners.add(m.providerAlias);
+  }
+
+  if (owners.size !== 1) return null;
+  return { provider: [...owners][0], model: modelId };
 }
 
 /**

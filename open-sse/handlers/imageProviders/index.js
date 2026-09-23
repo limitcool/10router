@@ -12,6 +12,7 @@ import blackForestLabs from "./blackForestLabs.js";
 import runwayml from "./runwayml.js";
 import cloudflareAi from "./cloudflareAi.js";
 import antigravity from "./antigravity.js";
+import openaiCompatNode from "./openaiCompatNode.js";
 
 const ADAPTERS = {
   openai: createOpenAIAdapter("openai"),
@@ -37,9 +38,15 @@ const ADAPTERS = {
 };
 
 export function getImageAdapter(provider) {
-  return ADAPTERS[provider] || null;
+  if (ADAPTERS[provider]) return ADAPTERS[provider];
+  // User-defined openai-compatible nodes (chat/responses) carry their own
+  // baseUrl in credentials and speak the OpenAI images API. Without this branch
+  // image models registered on such nodes are unresolvable.
+  if (provider?.startsWith?.("openai-compatible-")) return openaiCompatNode;
+  return null;
 }
 
 export function isImageProvider(provider) {
-  return provider in ADAPTERS;
+  if (provider in ADAPTERS) return true;
+  return !!provider?.startsWith?.("openai-compatible-");
 }
