@@ -228,12 +228,17 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   }
 
   // Native OpenAI-Responses upstreams (openai-compatible node with apiType
-  // "responses") take the real Responses wire shape: `reasoning: { effort }`.
-  // They do NOT accept the Chat-Completions `reasoning_effort` parameter — a
-  // shim that rewrites one into the other gets a hard 400 ("Unsupported
-  // parameter: reasoning_effort", e.g. cpa.meetsy.top). Keep the Responses
-  // shape intact for these providers; the reasoning translation pipeline is
-  // Chat-Completions-only and must not touch them.
+  // "responses") speak the real Responses wire shape. They reject the
+  // Chat-Completions `reasoning_effort` parameter outright with a hard 400
+  // ("Unsupported parameter: reasoning_effort" — e.g. cpa.meetsy.top), and an
+  // incoming `reasoning.effort` gets rewritten into exactly that by the
+  // translation shim, so it 400s too. Verified against the live upstream:
+  //   reasoning:{effort:"low"}  -> 400 Unsupported parameter: reasoning_effort
+  //   reasoning:{summary:"auto"}-> 200
+  //   (omitted)                 -> 200
+  // So for these providers drop `reasoning_effort` and the `effort` key, and
+  // keep only a `summary` when the client sent one. The Chat-Completions
+  // reasoning pipeline must not touch native Responses upstreams.
   const upstreamIsNativeResponses =
     typeof provider === "string" &&
     provider.startsWith("openai-compatible-") &&
@@ -242,10 +247,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     delete translatedBody.reasoning_effort;
     if (typeof translatedBody.reasoning?.effort === "string") {
       const summary = translatedBody.reasoning.summary;
-      // `effort` is unsupported upstream; keep `summary` (it is accepted) but
-      // never forward the effort value.
-      translatedBody.reasoning = summary !== undefined ? { summary } : {};
-      if (summary === undefined) delete translatedBody.reasoning;
+      if (summary !== undefined) {
+        translatedBody.reasoning = { summary };
+      } else {
+        delete translatedBody.reasoning;
+      }
     }
   }
 
