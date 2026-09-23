@@ -7,6 +7,7 @@ import { createStreamController } from "../utils/streamHandler.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
 import { createRequestLogger } from "../utils/requestLogger.js";
 import { getModelTargetFormat, getModelSupportedFormats, getModelStrip, getModelUpstreamId, getModelType, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
+import { resolveOpenAICompatibleApiType } from "../services/provider.js";
 import { PROVIDERS } from "../config/providers.js";
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
 import { HTTP_STATUS, TOKEN_SAVER_HEADER } from "../config/runtimeConfig.js";
@@ -223,6 +224,28 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     if (stripped.length > 0) {
       translatedBody.tools = deduped;
       log?.debug?.("TOOLDEDUP", `stripped ${stripped.length}: ${stripped.slice(0, 3).join(", ")}${stripped.length > 3 ? "..." : ""}`);
+    }
+  }
+
+  // Native OpenAI-Responses upstreams (openai-compatible node with apiType
+  // "responses") take the real Responses wire shape: `reasoning: { effort }`.
+  // They do NOT accept the Chat-Completions `reasoning_effort` parameter — a
+  // shim that rewrites one into the other gets a hard 400 ("Unsupported
+  // parameter: reasoning_effort", e.g. cpa.meetsy.top). Keep the Responses
+  // shape intact for these providers; the reasoning translation pipeline is
+  // Chat-Completions-only and must not touch them.
+  const upstreamIsNativeResponses =
+    typeof provider === "string" &&
+    provider.startsWith("openai-compatible-") &&
+    resolveOpenAICompatibleApiType(provider, credentials) === "responses";
+  if (upstreamIsNativeResponses) {
+    delete translatedBody.reasoning_effort;
+    if (typeof translatedBody.reasoning?.effort === "string") {
+      const summary = translatedBody.reasoning.summary;
+      // `effort` is unsupported upstream; keep `summary` (it is accepted) but
+      // never forward the effort value.
+      translatedBody.reasoning = summary !== undefined ? { summary } : {};
+      if (summary === undefined) delete translatedBody.reasoning;
     }
   }
 
