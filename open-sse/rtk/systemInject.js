@@ -54,7 +54,17 @@ function injectMessagesSystem(body, prompt) {
     : null;
   if (!arr) return;
 
-  const idx = arr.findIndex(m => m && (m.role === "system" || m.role === "developer"));
+  // Only real message items may carry a system/developer prompt. Responses bodies
+  // interleave non-message items that also carry role=developer — notably
+  // `additional_tools` (Codex sends one as input[0]) — and stamping a `content`
+  // field onto those makes strict upstreams reject the request with
+  // `Unknown parameter: 'input[0].content'` (cpa.meetsy.top, 400). Match on the
+  // item type, not just the role.
+  const idx = arr.findIndex(m =>
+    m &&
+    (m.role === "system" || m.role === "developer") &&
+    (m.type === undefined || m.type === "message")
+  );
   if (idx >= 0) {
     appendToOpenAIMessage(arr[idx], prompt);
   } else {
@@ -63,6 +73,10 @@ function injectMessagesSystem(body, prompt) {
 }
 
 function appendToOpenAIMessage(msg, prompt) {
+  // Defence in depth: never graft a `content` field onto a non-message item
+  // (function_call / reasoning / additional_tools / ...) — upstreams that
+  // validate the Responses shape reject it outright.
+  if (msg.type !== undefined && msg.type !== "message") return;
   if (typeof msg.content === "string") {
     msg.content = `${msg.content}${SEP}${prompt}`;
   } else if (Array.isArray(msg.content)) {
